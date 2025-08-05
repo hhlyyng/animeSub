@@ -42,3 +42,48 @@ obj/
 # VSCode Settings
 # =====================
 .vscode/
+
+# =====================
+# macOS
+# =====================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+**/.DS_Store
+**/._*
+**/.AppleDouble
+**/.LSOverride
+
+# =====================
+# Node.js / React 
+# =====================
+node_modules/
+dist/
+.env
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# =====================
+# .NET / C# 
+# =====================
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# =====================
+# SQLite 
+# =====================
+*.db
+*.db-shm
+*.db-wal
+
+# =====================
+# VSCode Settings
+# =====================
+.vscode/
