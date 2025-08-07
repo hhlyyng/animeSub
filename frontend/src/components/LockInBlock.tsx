@@ -30,8 +30,8 @@ const LoginBlock = () => {
     },
     en: {
       title: "Anime Subscription",
-      usernamePlaceholder: "Enter username",
-      passwordPlaceholder: "Enter password",
+      usernamePlaceholder: "Enter Username",
+      passwordPlaceholder: "Enter Password",
       loginButton: "Login",
       resetButton: "Reset",
       welcomeMessage: "Welcome",

@@ -25,7 +25,20 @@ const HomePage = ({username}:{username:string}) => {
         setIsExpanded(!isExpanded);
     }
 
-    return 
+    return (
+    //Main Container
+    <div style={{
+        display: "flex",
+        height: "100vh",
+        background: "#ffffff"
+    }}>
+        {/*Side bar div*/}
+        <div>
+            
+        </div>
+
+    </div>
+    )
 };
 
 export default HomePage;
