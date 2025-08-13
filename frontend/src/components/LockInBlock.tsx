@@ -6,6 +6,7 @@ const LoginBlock = () => {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [language, setLanguage] = useState("zh"); // 'zh' for Chinese, 'en' for English
+  const [loginState, setLoginState] = useState(false);
 
   // Language text configurations
   const texts: {
@@ -63,6 +64,10 @@ const LoginBlock = () => {
   const toggleLanguage = () => {
     setLanguage(language === "zh" ? "en" : "zh");
   };
+
+  const toggleLoginState = () => {
+    setLoginState(true)
+  }
 
   // Eye icon SVG for password visibility toggle
   const EyeIcon = ({ isOpen }: { isOpen: boolean }) => (

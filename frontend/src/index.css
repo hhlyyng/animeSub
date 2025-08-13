@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
@@ -65,4 +67,53 @@ button:focus-visible {
   button {
     background-color: #f9f9f9;
   }
+}
+
+
+/* index.css */
+
+.sidebar-div {
+  @apply bg-[#f7f7f8] flex relative text-black flex-col transition-[width] duration-100 ease-in-out;
+}
+
+.sidebar-div--expanded {
+  @apply w-[240px];
+}
+
+.sidebar-div--collapsed {
+  @apply w-[60px];
+}
+
+/* 下面这些保持不变（都是合法的 @apply 用法） */
+.sidebar-button-icon { @apply w-6 h-6 flex items-center justify-center shrink-0; }
+
+.sidebar-button {
+  @apply h-[44px] flex items-center justify-center rounded-lg
+         bg-transparent transition-all duration-200 ease-in-out text-gray-700 border-0;
+}
+.sidebar-button--expanded { @apply w-full px-2 py-2 gap-2 justify-start; }
+.sidebar-button--collapsed { @apply w-[44px] h-[44px] px-2 gap-0 justify-center items-center; }
+
+.sidebar-block-div { @apply w-full px-2 py-3 flex items-center justify-center; }
+
+nav.sidebar-block-div {
+  @apply px-2 py-1 flex flex-col gap-10 w-full;
+}
+
+/* toggle 按钮特殊样式 - 无边框，图标填满 */
+.sidebar-button[data-variant="toggle"] {
+  @apply border-0 bg-transparent p-0 focus:outline-none;
+}
+
+
+/* 针对展开状态下的 toggle 按钮，强制固定宽度 */
+.sidebar-button--expanded[data-variant="toggle"] {
+  @apply w-[44px] h-[44px] px-0 justify-start;
+}
+
+/* 仅用于顶部这一行：左对齐 */
+.sidebar-header { @apply w-full px-2 py-3 flex items-center justify-start; }
+
+.sidebar-header {
+  @apply w-full h-[44px] px-4 flex items-center gap-2 mb-10; /* 增加 1rem 间距 */
 }
