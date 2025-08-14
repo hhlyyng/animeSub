@@ -1,6 +1,7 @@
 import { SidebarButton } from "./SideBarButton";
 import React from "react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 // Icon SVG imports
 import HomeIcon from "../icon/HomeIcon";
@@ -11,11 +12,16 @@ import GithubIcon from "../icon/GithubIcon";
 import LogoutIcon from "../icon/LogoutIcon";
 import LanguageToggleIcon from "../icon/LanguageToggleIcon";
 
+type PageType = 'home' | 'setting' | 'download';
+
 interface SideBarProps {
   language: "en" | "zh";
+  currentPage: PageType;
+  onLanguageChange: (lang: "en" | "zh") => void;
 }
 
-const SideBar: React.FC<SideBarProps> = ({language}) => {
+const SideBar: React.FC<SideBarProps> = ({ language, currentPage, onLanguageChange }) => {
+  const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isToggleHovered, setIsToggleHovered] = useState(false);
   const [showText, setShowText] = useState(true);
@@ -35,34 +41,52 @@ const SideBar: React.FC<SideBarProps> = ({language}) => {
       settings: "设置",
       download: "下载",
       github: "项目地址",
-      logout: "退出",
-      languageSwitch: "切换英文"
+      logout: "登出",
+      languageSwitch: "English"
     },
     en: {
       home: "Homepage",
       settings: "Setting",
       download: "Download",
-      github: "GitHub Repo Address",
+      github: "GitHub",
       logout: "Logout",
-      languageSwitch:"Switch to Chinese"
+      languageSwitch: "切换中文"
     }
   };
 
   // Toggle sidebar function
   const toggleSideBar = () => {
     setIsCollapsed(prev => {
-      const next = !prev;           // 切换目标：折叠⇄展开
+      const next = !prev;
   
       if (next) {
-        // 正在折叠：先隐藏文字，再收起
         setShowText(false);
       } else {
-        // 正在展开：等宽度动画结束再显示文字
-        setTimeout(() => setShowText(true), 130);
+        setTimeout(() => setShowText(true), 120);
       }
   
       return next;
     });
+  };
+
+  // 切换语言
+  const toggleLanguage = () => {
+    onLanguageChange(language === "zh" ? "en" : "zh");
+  };
+
+  // 页面导航函数
+  const navigateToPage = (page: PageType) => {
+    switch (page) {
+      case 'home':
+        navigate('/home');
+        break;
+      case 'download':
+        navigate('/download');
+        break;
+      case 'setting':
+        navigate('/setting');
+        break;
+    }
   };
 
   // Get toggle icon based on hover and collapse state
@@ -73,7 +97,6 @@ const SideBar: React.FC<SideBarProps> = ({language}) => {
     return isCollapsed ? <ExpandSideBarArrow /> : <CollapseSideBarArrow />;
   };
 
-
   const currentLanguage = text[language] || text.en;
 
   return (
@@ -82,7 +105,7 @@ const SideBar: React.FC<SideBarProps> = ({language}) => {
         ${isCollapsed? "sidebar-div--collapsed" : "sidebar-div--expanded"}
         `}>
       {/* Toggle Button */}
-      <div className="sidebar-header flex flex-row gap-3 !justify-start !pt-8">
+      <div className="sidebar-header flex flex-row gap-3 !justify-start !pt-15">
         <SidebarButton
           icon={getToggleIcon()}
           label=""
@@ -91,19 +114,22 @@ const SideBar: React.FC<SideBarProps> = ({language}) => {
           collapsed={isCollapsed}
           onToggleHover={setIsToggleHovered}
           showtext={showText}
+          language={language}
         />
-        {!isCollapsed && <h2 className="font-bold flex-1 text-2xl">Anime-Sub</h2>}
+        {!isCollapsed && showText && <h2 className="font-bold flex-1 text-2xl">Anime-Sub</h2>}
       </div>
 
       {/* Navigation Items */}
-      <nav className="sidebar-block-div flex-col !gap-4 w-full !pb-40">
+      <nav className="sidebar-block-div flex-col !gap-4 w-full">
         <SidebarButton
           icon={<HomeIcon />}
           label={currentLanguage.home}
           variant="action"
           collapsed={isCollapsed}
-          onClick={() => console.log('Home clicked')}
+          onClick={() => navigateToPage('home')}
           showtext={showText}
+          active={currentPage === 'home'}
+          language={language}
         />
 
         <SidebarButton
@@ -111,8 +137,10 @@ const SideBar: React.FC<SideBarProps> = ({language}) => {
           label={currentLanguage.download}
           variant="action"
           collapsed={isCollapsed}
-          onClick={() => console.log('Download clicked')}
+          onClick={() => navigateToPage('download')}
           showtext={showText}
+          active={currentPage === 'download'}
+          language={language}
         />
         
         <SidebarButton
@@ -120,22 +148,23 @@ const SideBar: React.FC<SideBarProps> = ({language}) => {
           label={currentLanguage.settings}
           variant="action"
           collapsed={isCollapsed}
-          onClick={() => console.log('Settings clicked')}
+          onClick={() => navigateToPage('setting')}
           showtext={showText}
+          active={currentPage === 'setting'}
+          language={language}
         />
-        
-
       </nav>
 
       {/* Bottom Actions */}
-      <div className={`w-full px-2 py-2 gap-2 flex ${isCollapsed ? 'flex-col' : 'flex-row'}`}>
+      <div className={`w-full px-2 py-3 gap-1 flex ${isCollapsed ? 'flex-col gap-3' : 'flex-row'}`}>
         <SidebarButton
           icon={<GithubIcon />}
           label={currentLanguage.github}
           variant="action"
           collapsed={isCollapsed}
-          onClick={() => window.open('https://github.com', '_blank')}
+          onClick={() => window.open('https://github.com/hhlyyng/anime-subscription.git', '_blank')}
           showtext={showText}
+          language={language}
         />
         
         <SidebarButton
@@ -143,15 +172,20 @@ const SideBar: React.FC<SideBarProps> = ({language}) => {
           label={currentLanguage.languageSwitch}
           variant="action"
           collapsed={isCollapsed}
-          onClick={() => console.log('Logout clicked')}
+          onClick={toggleLanguage}
           showtext={showText}
+          language={language}
         />
+      </div>
+
+      <div className="w-full px-2 py-3 gap-1 flex flex-row border-t border-[#e0e0e0] mt-auto">
+        <div className="relative group !bg-blue-300 rounded-full flex items-center justify-center text-sm font-bold text-black shrink-0 w-[44px] h-[44px]">
+         U
+        </div>
+        {showText && !isCollapsed }
       </div>
     </div>
   );
 };
 
 export default SideBar;
-
-
-
