@@ -71,7 +71,7 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
   const visible = items.slice(startIndex, startIndex + windowSize);
 
   return (
-  <div className="w-full min-w-full overflow-hidden block">
+  <div className="w-fit overflow-hidden">
     {/* 标题 */}
     <h2 className="text-2xl font-bold text-gray-900 mb-6"
         style={{ marginLeft: `${titleMargin}px` }}>

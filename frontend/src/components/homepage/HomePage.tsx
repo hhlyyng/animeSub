@@ -27,7 +27,7 @@ const AppContent = () => {
   };
 
   return (
-    <div className="flex min-h-screen w-full mx-auto overflow-hidden">
+    <div className="flex min-h-screen w-screen mx-auto overflow-hidden">
       {/* Sidebar */}
       <SideBar 
         language={language}
@@ -36,7 +36,7 @@ const AppContent = () => {
       />
       
       {/* Main Content Area */}
-      <main className="flex-1 overflow-x-hidden">
+      <main className="flex-1 min-w-0 overflow-hidden flex justify-center">
         <Routes>
           <Route path="/" element={<HomeContent />} />
           <Route path="/home" element={<HomeContent />} />
