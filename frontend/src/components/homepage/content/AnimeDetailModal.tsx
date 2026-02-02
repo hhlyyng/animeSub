@@ -95,7 +95,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
         <div className="flex flex-col max-h-[90vh]">
           {/* 上半部分: 信息区 */}
-          <div className="flex p-6 gap-6">
+          <div className="flex pt-4 px-6 pb-6 gap-6">
             {/* 左: 图片 */}
             <div className="w-48 flex-shrink-0">
               <img
