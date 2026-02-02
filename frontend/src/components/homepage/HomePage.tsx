@@ -4,11 +4,13 @@ import DownloadPage from "./content/DownLoadPage";
 import HomeContent from "./content/HomePageContent";
 import Setting from "./content/SettingPage";
 import { useState } from 'react';
+import { useAppStore } from "../../stores/useAppStores";
 
 // Route Content
 const AppContent = () => {
   const [language, setLanguage] = useState<"en" | "zh">("zh");
   const location = useLocation();
+  const isModalOpen = useAppStore((state) => state.isModalOpen);
 
   // 从路径映射到页面类型
   const getCurrentPageType = (): 'home' | 'setting' | 'download' => {
@@ -36,7 +38,7 @@ const AppContent = () => {
       />
       
       {/* Main Content Area */}
-      <main className="flex-1 min-w-0 overflow-hidden flex justify-center">
+      <main className={`flex-1 min-w-0 overflow-hidden flex justify-center transition-all duration-200 ${isModalOpen ? 'blur-md pointer-events-none' : ''}`}>
         <Routes>
           <Route path="/" element={<HomeContent />} />
           <Route path="/home" element={<HomeContent />} />

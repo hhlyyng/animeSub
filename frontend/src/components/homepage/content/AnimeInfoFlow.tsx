@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { AnimeCard } from "./AnimeCard";
+import { AnimeDetailModal } from "./AnimeDetailModal";
 import type { AnimeInfo } from "./AnimeInfoType";
+import { useAppStore } from "../../../stores/useAppStores";
 
 type AnimeFlowProps = {
   topic: string;
@@ -16,6 +18,23 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
 
   const cardContainerRef = useRef<HTMLDivElement>(null);
   const [titleMargin, setTitleMargin] = useState(0);
+
+  // Modal 状态
+  const [selectedAnime, setSelectedAnime] = useState<AnimeInfo | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const setGlobalModalOpen = useAppStore((state) => state.setModalOpen);
+
+  const handleAnimeSelect = (anime: AnimeInfo) => {
+    setSelectedAnime(anime);
+    setIsModalOpen(true);
+    setGlobalModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedAnime(null);
+    setGlobalModalOpen(false);
+  };
 
 
   useEffect(() => {
@@ -53,6 +72,7 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
   const visible = items.slice(startIndex, startIndex + windowSize);
 
   return (
+  <>
   <div className="w-fit overflow-hidden">
     {/* 标题 */}
     <h2 className="text-2xl font-bold text-gray-900 mb-6"
@@ -97,7 +117,7 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
               className="flex-shrink-0"
               style={{ minWidth: '200px' }}
             >
-              <AnimeCard anime={anime} />
+              <AnimeCard anime={anime} onSelect={() => handleAnimeSelect(anime)} />
             </div>
           ))}
         </div>
@@ -131,6 +151,16 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
       )}
     </div>
   </div>
+
+  {/* Modal */}
+  {selectedAnime && (
+    <AnimeDetailModal
+      anime={selectedAnime}
+      open={isModalOpen}
+      onClose={handleCloseModal}
+    />
+  )}
+  </>
 );
 }
 

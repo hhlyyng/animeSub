@@ -7,10 +7,12 @@ interface AppState {
   // 状态
   username: string;
   language: Language;
-  
+  isModalOpen: boolean;
+
   // Actions
   setUsername: (name: string) => void;
   setLanguage: (lang: Language) => void;
+  setModalOpen: (open: boolean) => void;
   logout: () => void;
 }
 
@@ -20,13 +22,17 @@ export const useAppStore = create<AppState>()(
       // 初始状态
       username: "",
       language: "zh",
-      
+      isModalOpen: false,
+
       // 设置用户名
       setUsername: (name) => set({ username: name }),
-      
+
       // 设置语言
       setLanguage: (lang) => set({ language: lang }),
-      
+
+      // 设置 Modal 开关状态
+      setModalOpen: (open) => set({ isModalOpen: open }),
+
       // 退出登录
       logout: () => set({ username: "" }),
     }),

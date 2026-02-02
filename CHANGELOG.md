@@ -6,6 +6,139 @@
 
 ## 2026-02-02
 
+### AnimeDetailModal 优化重构
+
+#### 改动概述
+
+1. **Modal 模糊效果优化** - 只模糊内容区，Sidebar 保持清晰
+2. **全局语言状态集成** - Modal 根据全局语言设置显示对应语言的标题和描述
+3. **布局重构** - 改为上下结构（信息区 + 下载源区）
+4. **链接按钮样式优化** - 去除彩色背景，改为透明边框样式
+5. **关闭按钮样式优化** - 纯 X 图标，无背景无边框
+
+#### Junior Developer 学习要点
+
+##### 1. Zustand 状态管理 - 跨组件通信
+
+**场景**: Modal 打开时需要通知 HomePage 对内容区应用模糊效果
+
+**方案**: 在 Zustand store 中添加共享状态
+
+```tsx
+// useAppStores.tsx - 添加 Modal 状态
+interface AppState {
+  isModalOpen: boolean;
+  setModalOpen: (open: boolean) => void;
+}
+
+// AnimeInfoFlow.tsx - 打开 Modal 时设置状态
+const setGlobalModalOpen = useAppStore((state) => state.setModalOpen);
+const handleAnimeSelect = (anime: AnimeInfo) => {
+  setSelectedAnime(anime);
+  setGlobalModalOpen(true);  // 通知全局
+};
+
+// HomePage.tsx - 消费状态，条件渲染模糊
+const isModalOpen = useAppStore((state) => state.isModalOpen);
+<main className={`... ${isModalOpen ? 'blur-md pointer-events-none' : ''}`}>
+```
+
+**要点**: 使用 selector `(state) => state.xxx` 避免不必要的重渲染
+
+##### 2. React Portal - Modal 渲染到 body
+
+**场景**: Modal 需要脱离组件层级，避免被父元素的 `overflow: hidden` 或 `z-index` 影响
+
+```tsx
+import { createPortal } from "react-dom";
+
+// 将 Modal 内容渲染到 document.body
+return createPortal(modalContent, document.body);
+```
+
+**要点**: Portal 改变 DOM 位置但保留 React 事件冒泡
+
+##### 3. 覆盖全局 CSS - all: unset
+
+**场景**: 全局 CSS 给 `button` 设置了默认样式，需要完全重置
+
+```css
+/* index.css 中的全局按钮样式 */
+button {
+  background-color: #1a1a1a;
+  border: 1px solid transparent;
+}
+button:hover {
+  border-color: #646cff;
+}
+```
+
+```tsx
+// 使用 all: unset 完全重置
+<button
+  style={{
+    all: 'unset',  // 重置所有继承和默认样式
+    cursor: 'pointer',
+    position: 'absolute',
+    // ... 其他需要的样式
+  }}
+>
+```
+
+**要点**: `all: unset` 比逐个覆盖属性更彻底，适合需要完全自定义的组件
+
+##### 4. Tailwind group-hover - 父子联动效果
+
+**场景**: hover 按钮时改变内部 SVG 图标颜色
+
+```tsx
+<button className="group">
+  <svg>
+    <path className="stroke-gray-600 group-hover:stroke-black transition-colors" />
+  </svg>
+</button>
+```
+
+**要点**: `group` 标记父元素，`group-hover:` 在子元素上响应父元素的 hover
+
+##### 5. 语言切换的 fallback 模式
+
+**场景**: 根据语言显示标题，但某些数据可能缺失
+
+```tsx
+const language = useAppStore((state) => state.language);
+
+// 带 fallback 的语言选择
+const primaryTitle = language === 'zh'
+  ? (anime.ch_title || anime.en_title)   // 中文优先，fallback 英文
+  : (anime.en_title || anime.ch_title);  // 英文优先，fallback 中文
+
+const description = language === 'zh'
+  ? (anime.ch_desc || anime.en_desc || '暂无描述')
+  : (anime.en_desc || anime.ch_desc || 'No description available');
+```
+
+**要点**: 使用 `||` 链式 fallback，确保始终有内容显示
+
+#### 问题与解决方案
+
+| 问题 | 解决方案 |
+|------|----------|
+| Modal 模糊整个页面包括 Sidebar | 使用 Zustand 共享状态，只对内容区 `<main>` 应用 blur |
+| Modal 被父元素样式影响 | 使用 `createPortal` 渲染到 `document.body` |
+| 全局 button 样式干扰关闭按钮 | 使用 `all: unset` 完全重置样式 |
+| hover 效果在按钮方块上而非图标上 | 移除背景，使用 `group-hover` 只改变图标颜色 |
+| 多语言内容可能缺失 | 使用 `||` 链式 fallback |
+
+#### 相关文件
+
+- `frontend/src/stores/useAppStores.tsx` - 新增 `isModalOpen` 状态
+- `frontend/src/components/homepage/HomePage.tsx` - 条件模糊
+- `frontend/src/components/homepage/content/AnimeDetailModal.tsx` - 重构布局和样式
+- `frontend/src/components/homepage/content/AnimeInfoFlow.tsx` - 调用 `setModalOpen`
+
+---
+
 ### Sidebar 按钮与标题垂直对齐修复
 
 #### 改动点
