@@ -105,7 +105,7 @@ const SideBar: React.FC<SideBarProps> = ({ language, currentPage, onLanguageChan
         ${isCollapsed? "sidebar-div--collapsed" : "sidebar-div--expanded"}
         `}>
       {/* Toggle Button */}
-      <div className="sidebar-header flex flex-row gap-3 !justify-start !pt-15">
+      <div className="sidebar-header">
         <SidebarButton
           icon={getToggleIcon()}
           label=""

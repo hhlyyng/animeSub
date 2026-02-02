@@ -104,8 +104,7 @@ const HomeContent = () => {
     }
 
     return (
-        <div className="w-fit overflow-hidden">
-        {/* 👆 添加这个包裹层 */}
+        <div className="w-fit overflow-hidden content-header">
             <AnimeFlow topic="今日放送" items={animes} />
         </div>
     );

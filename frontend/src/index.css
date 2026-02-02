@@ -122,11 +122,12 @@ nav.sidebar-block-div {
   @apply w-[44px] h-[44px] px-0 justify-start;
 }
 
-/* 仅用于顶部这一行：左对齐 */
+/* 顶部标题区域 - 统一使用 pt-16 (64px) 作为页面顶部间距 */
 .sidebar-header {
-  @apply w-full px-2 py-3 flex items-center justify-start;
+  @apply w-full px-4 pt-16 pb-4 flex flex-row items-center gap-3 mb-6;
 }
 
-.sidebar-header {
-  @apply w-full h-[44px] px-4 flex items-center gap-2 mb-10; /* 增加 1rem 间距 */
+/* 主内容区顶部间距 - 与 sidebar-header 对齐 */
+.content-header {
+  @apply pt-16;
 }

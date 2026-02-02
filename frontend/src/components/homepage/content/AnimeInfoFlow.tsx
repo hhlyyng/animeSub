@@ -1,24 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { AnimeCard } from "./AnimeCard";
-
-type AnimeInfo = {
-  bangumi_id: string;
-  jp_title: string;
-  ch_title?: string;
-  en_title: string;
-  ch_desc?: string;
-  en_desc?: string;
-  score: string;
-  images: {
-    portrait: string;
-    landscape: string;
-  };
-  external_urls: {
-    bangumi: string;
-    tmdb: string;
-    anilist: string;
-  };
-};
+import type { AnimeInfo } from "./AnimeInfoType";
 
 type AnimeFlowProps = {
   topic: string;
