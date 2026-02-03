@@ -2433,9 +2433,129 @@ backend/Models/Dtos/
 
 ---
 
+## Phase 8: Testing Infrastructure
+
+**状态**: ✅ 已完成
+**完成时间**: 2026-02-03
+**测试数量**: 32 个单元测试
+
+### 📌 问题诊断
+
+| 问题类别 | 具体问题 | 影响等级 |
+|---------|---------|---------|
+| **质量保证** | 无测试项目，无法防止回归 | 🟡 中等 |
+| **重构信心** | 修改代码时无法验证正确性 | 🟡 中等 |
+| **CI/CD** | 无自动化测试流程 | 🟡 中等 |
+
+### 🎯 解决方案
+
+#### 测试项目结构
+```
+backend.Tests/
+├── backend.Tests.csproj          # xUnit + Moq + FluentAssertions
+├── Fixtures/
+│   └── TestDataFactory.cs        # 测试数据工厂
+├── Unit/
+│   ├── Services/
+│   │   ├── ResilienceServiceTests.cs
+│   │   ├── AnimeCacheServiceTests.cs
+│   │   └── AnimeAggregationServiceTests.cs
+│   └── Controllers/
+│       └── AnimeControllerTests.cs
+└── Mocks/                        # (预留)
+```
+
+### 📁 测试覆盖
+
+#### `ResilienceServiceTests.cs` (8 tests)
+- 首次成功返回结果
+- 重试后成功
+- 返回重试次数
+- 全部失败返回 false
+- 处理 HttpRequestException
+- 处理 TaskCanceledException
+- 处理 TimeoutException
+- 尊重 CancellationToken
+
+#### `AnimeCacheServiceTests.cs` (11 tests)
+- 内存缓存命中
+- SQLite 回退查询
+- 缓存未命中返回 null
+- 写入双层缓存
+- 批量图片查询
+- 完整番剧列表缓存
+
+#### `AnimeAggregationServiceTests.cs` (7 tests)
+- 缓存命中返回缓存数据
+- API 成功返回 API 数据
+- API 失败有缓存时回退
+- API 失败无缓存时返回失败
+- 缺少 Token 抛出异常
+- 设置客户端 Token
+- 成功后缓存结果
+
+#### `AnimeControllerTests.cs` (6 tests)
+- 返回 200 OK
+- 优先使用存储的 Token
+- 回退到 Header Token
+- 返回缓存元数据
+- 返回回退元数据
+- 记录请求日志
+
+### 📦 依赖包
+
+| 包名 | 版本 | 用途 |
+|-----|------|------|
+| xUnit | 2.9.x | 测试框架 |
+| Moq | 4.20.x | Mock 对象 |
+| FluentAssertions | 8.8.x | 可读断言 |
+
+### 📊 测试结果
+
+```
+测试总数: 32
+  通过数: 32 (快速测试 24 个 < 1秒)
+  失败数: 0
+
+覆盖的服务:
+- ResilienceService ✓
+- AnimeCacheService ✓
+- AnimeAggregationService ✓
+- AnimeController ✓
+```
+
+### 💡 使用方法
+
+```bash
+# 运行所有测试
+cd backend.Tests
+dotnet test
+
+# 运行快速测试（跳过 Polly 重试测试）
+dotnet test --filter "FullyQualifiedName~AnimeCacheServiceTests|FullyQualifiedName~AnimeAggregationServiceTests|FullyQualifiedName~AnimeControllerTests"
+
+# 显示详细输出
+dotnet test --verbosity normal
+```
+
+---
+
+### ✅ Phase 8 验收清单
+
+- [x] 创建 xUnit 测试项目
+- [x] 添加 Moq 和 FluentAssertions
+- [x] TestDataFactory 测试数据工厂
+- [x] ResilienceServiceTests (8 tests)
+- [x] AnimeCacheServiceTests (11 tests)
+- [x] AnimeAggregationServiceTests (7 tests)
+- [x] AnimeControllerTests (6 tests)
+- [x] 所有测试通过
+
+---
+
 ## 后续阶段
 
-Phase 8-11 的详细计划将在各阶段完成后更新...
+Phase 9-11 的详细计划将在各阶段完成后更新...
 
 ---
 
@@ -2445,8 +2565,10 @@ Phase 8-11 的详细计划将在各阶段完成后更新...
 - [HttpClient Best Practices](https://docs.microsoft.com/en-us/dotnet/architecture/microservices/implement-resilient-applications/use-httpclientfactory-to-implement-resilient-http-requests)
 - [Serilog Best Practices](https://github.com/serilog/serilog/wiki/Configuration-Basics)
 - [Generic Host](https://docs.microsoft.com/en-us/aspnet/core/fundamentals/host/generic-host)
+- [xUnit Documentation](https://xunit.net/docs/getting-started/netcore/cmdline)
+- [Moq Quickstart](https://github.com/moq/moq4/wiki/Quickstart)
 
 ---
 
 **最后更新**: 2026-02-03
-**下一步**: 开始 Phase 8 - Testing Infrastructure
+**下一步**: 开始 Phase 9 - Code Organization
