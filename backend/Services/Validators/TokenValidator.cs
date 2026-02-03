@@ -15,7 +15,8 @@ public class TokenValidator
     }
 
     /// <summary>
-    /// Validate Bangumi token (required)
+    /// Validate Bangumi token (required, OAuth 2.0 Bearer token)
+    /// According to Bangumi API documentation, tokens are typically 32+ characters
     /// </summary>
     public void ValidateBangumiToken(string? token)
     {
@@ -24,33 +25,44 @@ public class TokenValidator
             _logger.LogWarning("Bangumi token validation failed: token is missing");
             throw new InvalidCredentialsException(
                 "BangumiToken",
-                "Bangumi token is required. Please provide X-Bangumi-Token header.");
+                "Bangumi token is required. Please configure it in settings or provide X-Bangumi-Token header.");
         }
 
-        // Additional validation rules can be added here
-        // e.g., token format, length, pattern matching
-        if (token.Length < 10)
+        // Bangumi OAuth 2.0 tokens are typically 20+ characters
+        if (token.Length < 20)
         {
-            _logger.LogWarning("Bangumi token validation failed: token too short");
+            _logger.LogWarning("Bangumi token validation failed: token too short (length: {Length})", token.Length);
             throw new InvalidCredentialsException(
                 "BangumiToken",
-                "Bangumi token appears to be invalid (too short).");
+                "Bangumi token appears invalid (too short). Expected OAuth 2.0 Bearer token.");
         }
+
+        _logger.LogDebug("Bangumi token validated successfully");
     }
 
     /// <summary>
-    /// Validate TMDB token (optional)
+    /// Validate TMDB token (optional, API Read Access Token)
+    /// According to TMDB API documentation, API Read Access Tokens are typically 100+ characters (JWT-like)
     /// </summary>
     public void ValidateTmdbToken(string? token)
     {
-        // TMDB token is optional, so only validate if provided
-        if (!string.IsNullOrWhiteSpace(token) && token.Length < 10)
+        // TMDB token is optional, skip validation if not provided
+        if (string.IsNullOrWhiteSpace(token))
         {
-            _logger.LogWarning("TMDB token validation failed: token too short");
+            _logger.LogInformation("TMDB token not provided (optional, English metadata will be unavailable)");
+            return;
+        }
+
+        // TMDB API Read Access Tokens are typically 100+ characters (JWT format)
+        if (token.Length < 100)
+        {
+            _logger.LogWarning("TMDB token validation failed: token too short (length: {Length})", token.Length);
             throw new InvalidCredentialsException(
                 "TMDBToken",
-                "TMDB token appears to be invalid (too short).");
+                "TMDB token appears invalid (too short). Expected API Read Access Token (JWT format).");
         }
+
+        _logger.LogDebug("TMDB token validated successfully");
     }
 
     /// <summary>

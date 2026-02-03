@@ -1,8 +1,13 @@
 global using System.Text.Json;
 global using System.Net.Http;
 using Serilog;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore;
+using backend.Data;
+using backend.Services;
 using backend.Services.Interfaces;
 using backend.Services.Implementations;
+using backend.Services.Repositories;
 using backend.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -30,6 +35,19 @@ builder.Host.UseSerilog();
 
 // Add controllers
 builder.Services.AddControllers();
+
+// Configure SQLite database for anime caching
+var dataDirectory = Path.Combine(builder.Environment.ContentRootPath, "Data");
+Directory.CreateDirectory(dataDirectory);  // Ensure directory exists
+
+builder.Services.AddDbContext<AnimeDbContext>(options =>
+    options.UseSqlite($"Data Source={Path.Combine(dataDirectory, "anime.db")}"));
+
+// Configure Data Protection for encrypted token storage
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(
+        Path.Combine(builder.Environment.ContentRootPath, ".keys")))
+    .SetApplicationName("AnimeSubscription");
 
 // Register HttpClient factories - using factory delegates to avoid casting issues
 builder.Services.AddHttpClient("bangumi-client")
@@ -79,6 +97,13 @@ builder.Services.AddScoped<IAnimeAggregationService, AnimeAggregationService>();
 // Register validators
 builder.Services.AddScoped<backend.Services.Validators.TokenValidator>();
 
+// Register token storage service (encrypted persistent storage)
+builder.Services.AddSingleton<ITokenStorageService, TokenStorageService>();
+
+// Register anime caching services
+builder.Services.AddScoped<IAnimeRepository, AnimeRepository>();
+builder.Services.AddSingleton<IAnimeCacheService, AnimeCacheService>();
+
 // Register health check service
 builder.Services.AddSingleton<backend.Services.HealthCheckService>();
 
@@ -103,6 +128,14 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// Initialize database (create tables if not exist)
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+    db.Database.EnsureCreated();
+    Log.Information("Database initialized: {DbPath}", db.Database.GetConnectionString());
+}
 
 // Use middleware - ORDER MATTERS!
 // 1. Correlation ID (must be first to track all requests)

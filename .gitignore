@@ -30,6 +30,17 @@ obj/
 *.suo
 *.userosscache
 *.sln.docstates
+logs/
+appsettings.user.json
+.keys/
+
+# SQLite database files (but not source code in Data/)
+*.db
+*.db-shm
+*.db-wal
+backend/Data/*.db
+backend/Data/*.db-shm
+backend/Data/*.db-wal
 
 # =====================
 # SQLite

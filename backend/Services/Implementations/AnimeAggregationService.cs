@@ -6,23 +6,27 @@ namespace backend.Services.Implementations
 
 /// <summary>
 /// Service that aggregates anime data from multiple external APIs
+/// with two-tier caching (IMemoryCache + SQLite)
 /// </summary>
 public class AnimeAggregationService : IAnimeAggregationService
 {
     private readonly IBangumiClient _bangumiClient;
     private readonly ITMDBClient _tmdbClient;
     private readonly IAniListClient _aniListClient;
+    private readonly IAnimeCacheService _cacheService;
     private readonly ILogger<AnimeAggregationService> _logger;
 
     public AnimeAggregationService(
         IBangumiClient bangumiClient,
         ITMDBClient tmdbClient,
         IAniListClient aniListClient,
+        IAnimeCacheService cacheService,
         ILogger<AnimeAggregationService> logger)
     {
         _bangumiClient = bangumiClient ?? throw new ArgumentNullException(nameof(bangumiClient));
         _tmdbClient = tmdbClient ?? throw new ArgumentNullException(nameof(tmdbClient));
         _aniListClient = aniListClient ?? throw new ArgumentNullException(nameof(aniListClient));
+        _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -80,10 +84,43 @@ public class AnimeAggregationService : IAnimeAggregationService
                             ? scoreEl.GetDouble().ToString("F1")
                             : "0";
 
-                    _logger.LogInformation("Processing anime: {Title}", oriTitle);
+                    _logger.LogInformation("Processing anime: {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
 
-                    // Fetch external data in parallel with graceful degradation
-                    var tmdbResult = await FetchTmdbDataAsync(oriTitle, cancellationToken).ConfigureAwait(false);
+                    // Check cache for images first
+                    var cachedImages = await _cacheService.GetAnimeImagesCachedAsync(bangumiId);
+
+                    Models.TMDBAnimeInfo? tmdbResult = null;
+                    string? backdropUrl = cachedImages?.BackdropUrl;
+
+                    // Only fetch from TMDB if not cached
+                    if (cachedImages == null || string.IsNullOrEmpty(cachedImages.BackdropUrl))
+                    {
+                        tmdbResult = await FetchTmdbDataAsync(oriTitle, cancellationToken).ConfigureAwait(false);
+
+                        // Cache the images if fetched successfully
+                        if (tmdbResult != null)
+                        {
+                            var posterUrl = anime.TryGetProperty("images", out var imgProp) && imgProp.ValueKind != JsonValueKind.Null &&
+                                          imgProp.TryGetProperty("large", out var largeImage) && largeImage.ValueKind != JsonValueKind.Null
+                                          ? largeImage.GetString()
+                                          : null;
+
+                            await _cacheService.CacheAnimeImagesAsync(
+                                bangumiId,
+                                posterUrl,
+                                tmdbResult.BackdropUrl,
+                                null); // TMDB ID can be extracted if needed
+
+                            backdropUrl = tmdbResult.BackdropUrl;
+                            _logger.LogInformation("Cached images for {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Using cached images for {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
+                    }
+
+                    // Fetch AniList data (always fetch as it's lightweight and provides English metadata)
                     var anilistResult = await FetchAniListDataAsync(oriTitle, cancellationToken).ConfigureAwait(false);
 
                     // Build enriched anime object
@@ -102,7 +139,7 @@ public class AnimeAggregationService : IAnimeAggregationService
                                     images.TryGetProperty("large", out var large) && large.ValueKind != JsonValueKind.Null
                                     ? large.GetString() ?? ""
                                     : "",
-                            landscape = tmdbResult?.BackdropUrl ?? ""
+                            landscape = backdropUrl ?? ""
                         },
                         external_urls = new
                         {
