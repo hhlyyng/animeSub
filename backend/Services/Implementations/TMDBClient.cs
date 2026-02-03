@@ -49,7 +49,7 @@ namespace backend.Services.Implementations
                 }
 
                 const string language = "en-US";
-                var url = $"/search/tv?query={Uri.EscapeDataString(title)}&language={language}&page=1&include_adult=false";
+                var url = $"search/tv?query={Uri.EscapeDataString(title)}&language={language}&page=1&include_adult=false";
 
                 using var resp = await HttpClient.GetAsync(url);
                 resp.EnsureSuccessStatusCode();
@@ -87,7 +87,7 @@ namespace backend.Services.Implementations
                 // Fetch translations
                 if (tvId > 0)
                 {
-                    var tUrl = $"/tv/{tvId}/translations";
+                    var tUrl = $"tv/{tvId}/translations";
                     using var tResp = await HttpClient.GetAsync(tUrl);
                     tResp.EnsureSuccessStatusCode();
 
@@ -157,7 +157,7 @@ namespace backend.Services.Implementations
         public Task<List<string>> GetMovieImagesAsync(int movieId, string imageType = "posters", string size = "w500", string language = "en-US") =>
             ExecuteAsync(async () =>
             {
-                var url = $"/movie/{movieId}/images?language={language}&include_image_language=en,null";
+                var url = $"movie/{movieId}/images?language={language}&include_image_language=en,null";
                 var response = await HttpClient.GetAsync(url);
                 response.EnsureSuccessStatusCode();
 
@@ -180,7 +180,7 @@ namespace backend.Services.Implementations
         public Task<List<string>> GetTVImagesAsync(int tvId, string imageType = "posters", string size = "w500", string language = "en-US") =>
             ExecuteAsync(async () =>
             {
-                var url = $"/tv/{tvId}/images?language={language}&include_image_language=en,null";
+                var url = $"tv/{tvId}/images?language={language}&include_image_language=en,null";
                 var response = await HttpClient.GetAsync(url);
                 response.EnsureSuccessStatusCode();
 
@@ -203,7 +203,7 @@ namespace backend.Services.Implementations
         public Task<List<string>> GetPersonImagesAsync(int personId, string size = "w185") =>
             ExecuteAsync(async () =>
             {
-                var response = await HttpClient.GetAsync($"/person/{personId}/images");
+                var response = await HttpClient.GetAsync($"person/{personId}/images");
                 response.EnsureSuccessStatusCode();
 
                 var content = await response.Content.ReadAsStringAsync();

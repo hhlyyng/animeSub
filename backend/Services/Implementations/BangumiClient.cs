@@ -26,7 +26,7 @@ namespace backend.Services.Implementations
             {
                 EnsureTokenSet();
 
-                var response = await HttpClient.GetAsync("/calendar");
+                var response = await HttpClient.GetAsync("calendar");
                 response.EnsureSuccessStatusCode();
 
                 var content = await response.Content.ReadAsStringAsync();

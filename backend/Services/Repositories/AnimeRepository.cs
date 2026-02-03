@@ -89,7 +89,6 @@ public class AnimeRepository : IAnimeRepository
     public async Task<AnimeInfoEntity?> GetAnimeInfoAsync(int bangumiId)
     {
         var anime = await _context.AnimeInfos
-            .Include(a => a.Images)
             .FirstOrDefaultAsync(a => a.BangumiId == bangumiId);
 
         if (anime != null)
@@ -103,7 +102,6 @@ public class AnimeRepository : IAnimeRepository
     public async Task<List<AnimeInfoEntity>> GetAnimeInfoBatchAsync(List<int> bangumiIds)
     {
         var animes = await _context.AnimeInfos
-            .Include(a => a.Images)
             .Where(a => bangumiIds.Contains(a.BangumiId))
             .ToListAsync();
 

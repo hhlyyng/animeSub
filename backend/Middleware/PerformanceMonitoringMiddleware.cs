@@ -35,8 +35,11 @@ public class PerformanceMonitoringMiddleware
             stopwatch.Stop();
             var elapsedMs = stopwatch.ElapsedMilliseconds;
 
-            // Add performance timing header
-            context.Response.Headers.TryAdd("X-Response-Time-Ms", elapsedMs.ToString());
+            // Add performance timing header (only if response hasn't started)
+            if (!context.Response.HasStarted)
+            {
+                context.Response.Headers.TryAdd("X-Response-Time-Ms", elapsedMs.ToString());
+            }
 
             // Log performance metrics
             LogPerformanceMetrics(requestMethod, requestPath, elapsedMs, context.Response.StatusCode);

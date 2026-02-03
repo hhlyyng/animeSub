@@ -40,6 +40,14 @@ public class ExceptionHandlerMiddleware
 
     private async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
+        // Cannot modify response if it has already started
+        if (context.Response.HasStarted)
+        {
+            _logger.LogWarning("Response has already started, cannot write error response for: {ExceptionType}",
+                exception.GetType().Name);
+            return;
+        }
+
         var errorResponse = CreateErrorResponse(context, exception);
 
         context.Response.ContentType = "application/json";

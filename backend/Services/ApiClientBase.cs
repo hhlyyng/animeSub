@@ -18,6 +18,11 @@ public abstract class ApiClientBase<TClient> where TClient : class
         HttpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         Logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
+        // Ensure BaseAddress ends with '/' to prevent path resolution issues
+        // Without trailing slash: BaseAddress="http://a.com/b" + "/c" = "http://a.com/c" (wrong)
+        // With trailing slash: BaseAddress="http://a.com/b/" + "c" = "http://a.com/b/c" (correct)
+        if (!baseUrl.EndsWith('/'))
+            baseUrl += '/';
         HttpClient.BaseAddress = new Uri(baseUrl);
     }
 

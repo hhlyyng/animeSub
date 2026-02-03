@@ -19,8 +19,4 @@ public class AnimeImagesEntity
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
-
-    // Foreign key navigation
-    [ForeignKey("BangumiId")]
-    public AnimeInfoEntity? AnimeInfo { get; set; }
 }

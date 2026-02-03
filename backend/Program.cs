@@ -110,7 +110,7 @@ builder.Services.AddSingleton<ITokenStorageService, TokenStorageService>();
 
 // Register anime caching services
 builder.Services.AddScoped<IAnimeRepository, AnimeRepository>();
-builder.Services.AddSingleton<IAnimeCacheService, AnimeCacheService>();
+builder.Services.AddScoped<IAnimeCacheService, AnimeCacheService>();
 
 // Register resilience service (Polly retry policies)
 builder.Services.AddSingleton<IResilienceService, ResilienceService>();
@@ -186,12 +186,6 @@ app.MapGet("/", (backend.Services.HealthCheckService healthCheck) =>
             "GET /health/ready - Readiness probe"
         }
     });
-});
-
-app.MapGet("/health", (backend.Services.HealthCheckService healthCheck) =>
-{
-    var health = healthCheck.GetHealthStatus();
-    return Results.Ok(health);
 });
 
 app.MapGet("/health/live", (backend.Services.HealthCheckService healthCheck) =>

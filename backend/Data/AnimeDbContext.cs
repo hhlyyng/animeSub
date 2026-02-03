@@ -32,16 +32,10 @@ public class AnimeDbContext : DbContext
             entity.HasIndex(e => new { e.NameChinese, e.NameJapanese });
         });
 
-        // Configure AnimeImages
+        // Configure AnimeImages (standalone, no FK constraint to AnimeInfo)
         modelBuilder.Entity<AnimeImagesEntity>(entity =>
         {
             entity.HasKey(e => e.BangumiId);
-
-            // One-to-one relationship with AnimeInfo
-            entity.HasOne(e => e.AnimeInfo)
-                  .WithOne(e => e.Images)
-                  .HasForeignKey<AnimeImagesEntity>(e => e.BangumiId)
-                  .OnDelete(DeleteBehavior.Cascade);
         });
 
         // Configure DailyScheduleCache
