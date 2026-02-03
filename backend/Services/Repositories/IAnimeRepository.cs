@@ -10,6 +10,7 @@ public interface IAnimeRepository
     // Daily schedule cache
     Task<List<int>?> GetDailyScheduleAsync(string date);
     Task SaveDailyScheduleAsync(string date, List<int> bangumiIds);
+    Task<DateTime?> GetDailyScheduleCacheTimeAsync(string date);
 
     // Anime info
     Task<AnimeInfoEntity?> GetAnimeInfoAsync(int bangumiId);

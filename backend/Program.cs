@@ -104,6 +104,9 @@ builder.Services.AddSingleton<ITokenStorageService, TokenStorageService>();
 builder.Services.AddScoped<IAnimeRepository, AnimeRepository>();
 builder.Services.AddSingleton<IAnimeCacheService, AnimeCacheService>();
 
+// Register resilience service (Polly retry policies)
+builder.Services.AddSingleton<IResilienceService, ResilienceService>();
+
 // Register health check service
 builder.Services.AddSingleton<backend.Services.HealthCheckService>();
 

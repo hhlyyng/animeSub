@@ -13,6 +13,11 @@ public interface IAnimeCacheService
     // Daily schedule caching
     Task<List<int>?> GetTodayScheduleCachedAsync();
     Task CacheTodayScheduleAsync(List<int> bangumiIds);
+    Task<DateTime?> GetTodayScheduleCacheTimeAsync();
+
+    // Full anime data caching (for fallback)
+    Task<List<object>?> GetCachedAnimeListAsync();
+    Task CacheAnimeListAsync(List<object> animes);
 
     // Anime images caching
     Task<AnimeImagesEntity?> GetAnimeImagesCachedAsync(int bangumiId);
@@ -84,6 +89,40 @@ public class AnimeCacheService : IAnimeCacheService
         _memoryCache.Set(cacheKey, bangumiIds, tomorrow);
 
         _logger.LogInformation("Daily schedule cached for {Date} ({Count} anime)", today, bangumiIds.Count);
+    }
+
+    public async Task<DateTime?> GetTodayScheduleCacheTimeAsync()
+    {
+        var today = DateTime.Today.ToString("yyyy-MM-dd");
+        return await _repository.GetDailyScheduleCacheTimeAsync(today);
+    }
+
+    #endregion
+
+    #region Full Anime List Cache (for fallback)
+
+    private const string ANIME_LIST_CACHE_KEY = "anime_list_today";
+
+    public Task<List<object>?> GetCachedAnimeListAsync()
+    {
+        if (_memoryCache.TryGetValue(ANIME_LIST_CACHE_KEY, out List<object>? cached))
+        {
+            _logger.LogInformation("Full anime list retrieved from memory cache ({Count} items)", cached?.Count ?? 0);
+            return Task.FromResult(cached);
+        }
+
+        _logger.LogDebug("No cached anime list found in memory");
+        return Task.FromResult<List<object>?>(null);
+    }
+
+    public Task CacheAnimeListAsync(List<object> animes)
+    {
+        // Cache in memory until tomorrow 00:00
+        var tomorrow = DateTime.Today.AddDays(1);
+        _memoryCache.Set(ANIME_LIST_CACHE_KEY, animes, tomorrow);
+
+        _logger.LogInformation("Full anime list cached in memory ({Count} items)", animes.Count);
+        return Task.CompletedTask;
     }
 
     #endregion

@@ -74,6 +74,14 @@ public class AnimeRepository : IAnimeRepository
         await _context.SaveChangesAsync();
     }
 
+    public async Task<DateTime?> GetDailyScheduleCacheTimeAsync(string date)
+    {
+        var cache = await _context.DailyScheduleCaches
+            .FirstOrDefaultAsync(c => c.Date == date);
+
+        return cache?.CreatedAt;
+    }
+
     #endregion
 
     #region Anime Info

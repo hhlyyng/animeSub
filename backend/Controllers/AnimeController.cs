@@ -70,24 +70,34 @@ public class AnimeController : ControllerBase
             bangumiToken,
             tmdbToken);
 
-        // Get aggregated anime data
+        // Get aggregated anime data with data source tracking
         // All exceptions are handled by global exception middleware
-        var enrichedAnimes = await _aggregationService.GetTodayAnimeEnrichedAsync(
+        var response = await _aggregationService.GetTodayAnimeEnrichedAsync(
             validatedBangumiToken,
             validatedTmdbToken,
             cancellationToken).ConfigureAwait(false);
 
-        _logger.LogInformation("Successfully retrieved {Count} anime for today", enrichedAnimes.Count);
+        _logger.LogInformation(
+            "Retrieved {Count} anime for today (source: {DataSource}, stale: {IsStale}, retries: {RetryAttempts})",
+            response.Count, response.DataSource, response.IsStale, response.RetryAttempts);
 
+        // Return response with data source metadata for frontend
         return Ok(new
         {
-            success = true,
+            success = response.Success,
             data = new
             {
-                count = enrichedAnimes.Count,
-                animes = enrichedAnimes
+                count = response.Count,
+                animes = response.Animes
             },
-            message = "Success"
+            metadata = new
+            {
+                dataSource = response.DataSource.ToString().ToLowerInvariant(),  // "api", "cache", "cachefallback"
+                isStale = response.IsStale,
+                lastUpdated = response.LastUpdated?.ToString("o"),  // ISO 8601 format
+                retryAttempts = response.RetryAttempts
+            },
+            message = response.Message
         });
     }
 }
