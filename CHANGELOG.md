@@ -4,6 +4,216 @@
 
 ---
 
+## 2026-02-04
+
+### Mikan RSS 订阅系统实现
+
+#### 改动概述
+
+实现完整的 Mikan RSS 订阅功能，支持用户订阅番剧并自动下载新资源到 qBittorrent。
+
+#### 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| 订阅管理 | 创建、编辑、删除番剧订阅 |
+| RSS 轮询 | 后台定时检查新资源 (可配置间隔) |
+| 关键词过滤 | 支持包含/排除关键词筛选 |
+| 字幕组筛选 | 可指定特定字幕组 |
+| 自动下载 | 新资源自动推送到 qBittorrent |
+| 下载历史 | 记录所有下载，防止重复 |
+
+#### 新增文件
+
+**数据层**
+| 文件 | 说明 |
+|------|------|
+| `backend/Data/Entities/SubscriptionEntity.cs` | 订阅实体 |
+| `backend/Data/Entities/DownloadHistoryEntity.cs` | 下载历史实体 |
+| `backend/Services/Repositories/ISubscriptionRepository.cs` | 仓储接口 |
+| `backend/Services/Repositories/SubscriptionRepository.cs` | 仓储实现 |
+
+**配置**
+| 文件 | 说明 |
+|------|------|
+| `backend/Models/Configuration/MikanConfiguration.cs` | Mikan 配置 |
+| `backend/Models/Configuration/QBittorrentConfiguration.cs` | qBittorrent 配置 |
+
+**API 客户端**
+| 文件 | 说明 |
+|------|------|
+| `backend/Models/Mikan/MikanRssModels.cs` | RSS 数据模型 |
+| `backend/Services/Interfaces/IMikanClient.cs` | Mikan 客户端接口 |
+| `backend/Services/Implementations/MikanClient.cs` | RSS 解析实现 |
+
+**业务逻辑**
+| 文件 | 说明 |
+|------|------|
+| `backend/Models/Dtos/SubscriptionDtos.cs` | 请求/响应 DTO |
+| `backend/Services/Interfaces/ISubscriptionService.cs` | 服务接口 |
+| `backend/Services/Implementations/SubscriptionService.cs` | 服务实现 |
+
+**控制器和后台服务**
+| 文件 | 说明 |
+|------|------|
+| `backend/Controllers/SubscriptionController.cs` | REST API |
+| `backend/Services/Background/RssPollingService.cs` | 后台轮询服务 |
+
+#### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/Data/AnimeDbContext.cs` | 添加 Subscriptions 和 DownloadHistory DbSet |
+| `backend/Services/Interfaces/IQBittorrentService.cs` | 扩展接口方法 |
+| `backend/Services/Implementations/QBittorrentService.cs` | 完整实现 |
+| `backend/appsettings.json` | 添加 Mikan 和 QBittorrent 配置 |
+| `backend/Program.cs` | 注册新服务 |
+
+#### 数据库表结构
+
+**Subscriptions 表**
+```
+Id              INT PRIMARY KEY AUTO_INCREMENT
+BangumiId       INT NOT NULL           -- Bangumi 番剧 ID
+Title           NVARCHAR NOT NULL      -- 番剧标题
+MikanBangumiId  NVARCHAR NOT NULL      -- Mikan 番剧 ID
+SubgroupId      NVARCHAR NULL          -- 字幕组 ID
+SubgroupName    NVARCHAR NULL          -- 字幕组名称
+KeywordInclude  NVARCHAR NULL          -- 包含关键词 (逗号分隔)
+KeywordExclude  NVARCHAR NULL          -- 排除关键词 (逗号分隔)
+IsEnabled       BIT DEFAULT 1          -- 是否启用
+LastCheckedAt   DATETIME NULL          -- 上次检查时间
+LastDownloadAt  DATETIME NULL          -- 上次下载时间
+DownloadCount   INT DEFAULT 0          -- 已下载集数
+CreatedAt       DATETIME NOT NULL
+UpdatedAt       DATETIME NOT NULL
+```
+
+**DownloadHistory 表**
+```
+Id              INT PRIMARY KEY AUTO_INCREMENT
+SubscriptionId  INT NOT NULL           -- 关联订阅
+TorrentUrl      NVARCHAR NOT NULL      -- 种子 URL
+TorrentHash     NVARCHAR NOT NULL      -- 种子哈希 (UNIQUE)
+Title           NVARCHAR NOT NULL      -- 资源标题
+FileSize        BIGINT NULL            -- 文件大小
+Status          INT DEFAULT 0          -- 状态枚举
+ErrorMessage    NVARCHAR NULL          -- 错误信息
+PublishedAt     DATETIME NOT NULL      -- RSS 发布时间
+DiscoveredAt    DATETIME NOT NULL      -- 发现时间
+DownloadedAt    DATETIME NULL          -- 推送到 qB 时间
+```
+
+#### API 端点
+
+| Method | Endpoint | 说明 |
+|--------|----------|------|
+| GET | `/api/subscription` | 获取所有订阅 |
+| GET | `/api/subscription/{id}` | 获取单个订阅 |
+| POST | `/api/subscription` | 创建订阅 |
+| PUT | `/api/subscription/{id}` | 更新订阅 |
+| DELETE | `/api/subscription/{id}` | 删除订阅 |
+| POST | `/api/subscription/{id}/toggle?enabled=true` | 启用/禁用 |
+| POST | `/api/subscription/{id}/check` | 手动检查更新 |
+| POST | `/api/subscription/check-all` | 检查所有订阅 |
+| GET | `/api/subscription/{id}/history` | 获取下载历史 |
+
+#### 配置项 (appsettings.json)
+
+```json
+{
+  "Mikan": {
+    "BaseUrl": "https://mikanani.me",
+    "PollingIntervalMinutes": 30,
+    "EnablePolling": true,
+    "MaxSubscriptionsPerPoll": 50,
+    "TimeoutSeconds": 30,
+    "StartupDelaySeconds": 30
+  },
+  "QBittorrent": {
+    "Host": "localhost",
+    "Port": 8080,
+    "Username": "admin",
+    "Password": "",
+    "DefaultSavePath": null,
+    "Category": "anime",
+    "PauseTorrentAfterAdd": false,
+    "TimeoutSeconds": 30
+  }
+}
+```
+
+#### 后台轮询流程
+
+```
+RssPollingService (BackgroundService)
+    |
+    +-- 启动后等待 StartupDelaySeconds (默认 30 秒)
+    |
+    +-- 循环 (每 PollingIntervalMinutes 分钟)
+        |
+        +-- 检查 EnablePolling 配置
+        |
+        +-- 对每个启用的订阅:
+            |
+            +-- 调用 MikanClient 获取 RSS
+            +-- 解析 XML，提取资源列表
+            +-- 过滤:
+            |   +-- 检查 TorrentHash 是否已下载
+            |   +-- 匹配字幕组筛选
+            |   +-- 关键词过滤/排除
+            |
+            +-- 推送新资源到 qBittorrent
+            +-- 记录下载历史
+            +-- 更新订阅状态
+```
+
+#### 使用示例
+
+**创建订阅**
+```bash
+curl -X POST http://localhost:5072/api/subscription \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bangumiId": 123456,
+    "title": "我的番剧",
+    "mikanBangumiId": "3141",
+    "subgroupId": "583",
+    "subgroupName": "ANi",
+    "keywordInclude": "1080p,简体",
+    "keywordExclude": "HEVC"
+  }'
+```
+
+**手动检查更新**
+```bash
+curl -X POST http://localhost:5072/api/subscription/1/check
+```
+
+#### 相关文件
+
+- `backend/Data/Entities/SubscriptionEntity.cs`
+- `backend/Data/Entities/DownloadHistoryEntity.cs`
+- `backend/Data/AnimeDbContext.cs`
+- `backend/Services/Repositories/ISubscriptionRepository.cs`
+- `backend/Services/Repositories/SubscriptionRepository.cs`
+- `backend/Models/Configuration/MikanConfiguration.cs`
+- `backend/Models/Configuration/QBittorrentConfiguration.cs`
+- `backend/Models/Mikan/MikanRssModels.cs`
+- `backend/Services/Interfaces/IMikanClient.cs`
+- `backend/Services/Implementations/MikanClient.cs`
+- `backend/Services/Interfaces/IQBittorrentService.cs`
+- `backend/Services/Implementations/QBittorrentService.cs`
+- `backend/Models/Dtos/SubscriptionDtos.cs`
+- `backend/Services/Interfaces/ISubscriptionService.cs`
+- `backend/Services/Implementations/SubscriptionService.cs`
+- `backend/Controllers/SubscriptionController.cs`
+- `backend/Services/Background/RssPollingService.cs`
+- `backend/appsettings.json`
+- `backend/Program.cs`
+
+---
+
 ## 2026-02-03
 
 ### Backend 运行时 Bug 修复
