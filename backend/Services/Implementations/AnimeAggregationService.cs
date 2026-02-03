@@ -1,5 +1,6 @@
 using System.Text.Json;
 using backend.Models;
+using backend.Models.Dtos;
 using backend.Services.Interfaces;
 
 namespace backend.Services.Implementations;
@@ -105,13 +106,13 @@ public class AnimeAggregationService : IAnimeAggregationService
                 Message = $"API request failed after {retryCount} retries and no cached data available.",
                 LastUpdated = null,
                 Count = 0,
-                Animes = new List<object>(),
+                Animes = new List<AnimeInfoDto>(),
                 RetryAttempts = retryCount
             };
         }
 
         // Step 4: Process API data and build enriched list
-        var enrichedAnimes = new List<object>();
+        var enrichedAnimes = new List<AnimeInfoDto>();
 
         try
         {
@@ -138,21 +139,11 @@ public class AnimeAggregationService : IAnimeAggregationService
             // Step 5: Cache the results
             if (enrichedAnimes.Count > 0)
             {
-                // Extract bangumi IDs for caching
-                var bangumiIds = new List<int>();
-                foreach (var anime in enrichedAnimes)
-                {
-                    var type = anime.GetType();
-                    var prop = type.GetProperty("bangumi_id");
-                    if (prop != null)
-                    {
-                        var idStr = prop.GetValue(anime)?.ToString();
-                        if (int.TryParse(idStr, out var id))
-                        {
-                            bangumiIds.Add(id);
-                        }
-                    }
-                }
+                // Extract bangumi IDs for caching (now strongly typed)
+                var bangumiIds = enrichedAnimes
+                    .Where(a => int.TryParse(a.BangumiId, out _))
+                    .Select(a => int.Parse(a.BangumiId))
+                    .ToList();
 
                 await _cacheService.CacheTodayScheduleAsync(bangumiIds);
                 await _cacheService.CacheAnimeListAsync(enrichedAnimes);
@@ -198,7 +189,7 @@ public class AnimeAggregationService : IAnimeAggregationService
         }
     }
 
-    private async Task<object?> ProcessSingleAnimeAsync(
+    private async Task<AnimeInfoDto?> ProcessSingleAnimeAsync(
         JsonElement anime,
         string? tmdbToken,
         CancellationToken cancellationToken)
@@ -268,29 +259,31 @@ public class AnimeAggregationService : IAnimeAggregationService
         // Fetch AniList data
         var anilistResult = await FetchAniListDataAsync(oriTitle, cancellationToken);
 
-        // Build enriched anime object
-        return new
+        // Build enriched anime DTO (strongly typed)
+        var portraitUrl = anime.TryGetProperty("images", out var images) && images.ValueKind != JsonValueKind.Null &&
+                images.TryGetProperty("large", out var large) && large.ValueKind != JsonValueKind.Null
+                ? large.GetString() ?? ""
+                : "";
+
+        return new AnimeInfoDto
         {
-            bangumi_id = bangumiId.ToString(),
-            jp_title = containsJapaneseInOriTitle ? oriTitle : "",
-            ch_title = containsPureChineseInOriTitle ? oriTitle : chTitle,
-            en_title = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "",
-            ch_desc = chDesc,
-            en_desc = tmdbResult?.EnglishSummary ?? anilistResult?.EnglishSummary ?? "",
-            score = score,
-            images = new
+            BangumiId = bangumiId.ToString(),
+            JpTitle = containsJapaneseInOriTitle ? oriTitle : "",
+            ChTitle = containsPureChineseInOriTitle ? oriTitle : chTitle,
+            EnTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "",
+            ChDesc = chDesc,
+            EnDesc = tmdbResult?.EnglishSummary ?? anilistResult?.EnglishSummary ?? "",
+            Score = score,
+            Images = new AnimeImagesDto
             {
-                portrait = anime.TryGetProperty("images", out var images) && images.ValueKind != JsonValueKind.Null &&
-                        images.TryGetProperty("large", out var large) && large.ValueKind != JsonValueKind.Null
-                        ? large.GetString() ?? ""
-                        : "",
-                landscape = backdropUrl ?? ""
+                Portrait = portraitUrl,
+                Landscape = backdropUrl ?? ""
             },
-            external_urls = new
+            ExternalUrls = new ExternalUrlsDto
             {
-                bangumi = $"https://bgm.tv/subject/{bangumiId}",
-                tmdb = tmdbResult?.OriSiteUrl ?? "",
-                anilist = anilistResult?.OriSiteUrl ?? ""
+                Bangumi = $"https://bgm.tv/subject/{bangumiId}",
+                Tmdb = tmdbResult?.OriSiteUrl ?? "",
+                Anilist = anilistResult?.OriSiteUrl ?? ""
             }
         };
     }

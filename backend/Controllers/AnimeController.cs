@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using backend.Models.Dtos;
 using backend.Services;
 using backend.Services.Interfaces;
 using backend.Services.Validators;
@@ -49,7 +50,7 @@ public class AnimeController : ControllerBase
     /// <response code="502">External API error</response>
     /// <response code="500">Internal server error</response>
     [HttpGet("today")]
-    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(Models.ErrorResponse), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(Models.ErrorResponse), StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(typeof(Models.ErrorResponse), StatusCodes.Status408RequestTimeout)]

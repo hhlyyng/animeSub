@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Caching.Memory;
 using backend.Services.Repositories;
 using backend.Data.Entities;
+using backend.Models.Dtos;
 
 namespace backend.Services;
 
@@ -16,8 +17,8 @@ public interface IAnimeCacheService
     Task<DateTime?> GetTodayScheduleCacheTimeAsync();
 
     // Full anime data caching (for fallback)
-    Task<List<object>?> GetCachedAnimeListAsync();
-    Task CacheAnimeListAsync(List<object> animes);
+    Task<List<AnimeInfoDto>?> GetCachedAnimeListAsync();
+    Task CacheAnimeListAsync(List<AnimeInfoDto> animes);
 
     // Anime images caching
     Task<AnimeImagesEntity?> GetAnimeImagesCachedAsync(int bangumiId);
@@ -103,19 +104,19 @@ public class AnimeCacheService : IAnimeCacheService
 
     private const string ANIME_LIST_CACHE_KEY = "anime_list_today";
 
-    public Task<List<object>?> GetCachedAnimeListAsync()
+    public Task<List<AnimeInfoDto>?> GetCachedAnimeListAsync()
     {
-        if (_memoryCache.TryGetValue(ANIME_LIST_CACHE_KEY, out List<object>? cached))
+        if (_memoryCache.TryGetValue(ANIME_LIST_CACHE_KEY, out List<AnimeInfoDto>? cached))
         {
             _logger.LogInformation("Full anime list retrieved from memory cache ({Count} items)", cached?.Count ?? 0);
             return Task.FromResult(cached);
         }
 
         _logger.LogDebug("No cached anime list found in memory");
-        return Task.FromResult<List<object>?>(null);
+        return Task.FromResult<List<AnimeInfoDto>?>(null);
     }
 
-    public Task CacheAnimeListAsync(List<object> animes)
+    public Task CacheAnimeListAsync(List<AnimeInfoDto> animes)
     {
         // Cache in memory until tomorrow 00:00
         var tomorrow = DateTime.Today.AddDays(1);

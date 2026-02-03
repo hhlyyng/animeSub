@@ -1,3 +1,5 @@
+using backend.Models.Dtos;
+
 namespace backend.Models;
 
 /// <summary>
@@ -57,9 +59,9 @@ public class AnimeListResponse
     public int Count { get; set; }
 
     /// <summary>
-    /// The anime data
+    /// The anime data (strongly typed)
     /// </summary>
-    public List<object> Animes { get; set; } = new();
+    public List<AnimeInfoDto> Animes { get; set; } = new();
 
     /// <summary>
     /// Number of retry attempts made (if any)
