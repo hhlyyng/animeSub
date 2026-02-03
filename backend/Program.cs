@@ -38,6 +38,12 @@ builder.Host.UseSerilog();
 builder.Services.Configure<ApiConfiguration>(
     builder.Configuration.GetSection(ApiConfiguration.SectionName));
 
+// Bind Mikan and QBittorrent configuration
+builder.Services.Configure<backend.Models.Configuration.MikanConfiguration>(
+    builder.Configuration.GetSection(backend.Models.Configuration.MikanConfiguration.SectionName));
+builder.Services.Configure<backend.Models.Configuration.QBittorrentConfiguration>(
+    builder.Configuration.GetSection(backend.Models.Configuration.QBittorrentConfiguration.SectionName));
+
 // Add controllers
 builder.Services.AddControllers();
 
@@ -96,7 +102,8 @@ builder.Services.AddScoped<IQBittorrentService>(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.QBittorrentService>>();
-    return new backend.Services.Implementations.QBittorrentService(factory.CreateClient("qbittorrent-client"), logger);
+    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<backend.Models.Configuration.QBittorrentConfiguration>>();
+    return new backend.Services.Implementations.QBittorrentService(factory.CreateClient("qbittorrent-client"), logger, config);
 });
 
 // Register aggregation service
