@@ -228,36 +228,41 @@ public class AnimeAggregationService : IAnimeAggregationService
         Models.TMDBAnimeInfo? tmdbResult = null;
         string? backdropUrl = cachedImages?.BackdropUrl;
 
-        // Only fetch from TMDB if not cached
-        if (cachedImages == null || string.IsNullOrEmpty(cachedImages.BackdropUrl))
+        // Fetch TMDB and AniList in parallel for better performance
+        var needTmdbFetch = cachedImages == null || string.IsNullOrEmpty(cachedImages.BackdropUrl);
+
+        var tmdbTask = needTmdbFetch
+            ? FetchTmdbDataAsync(oriTitle, cancellationToken)
+            : Task.FromResult<Models.TMDBAnimeInfo?>(null);
+        var anilistTask = FetchAniListDataAsync(oriTitle, cancellationToken);
+
+        // Wait for both to complete (parallel execution)
+        await Task.WhenAll(tmdbTask, anilistTask).ConfigureAwait(false);
+
+        tmdbResult = await tmdbTask;
+        var anilistResult = await anilistTask;
+
+        // Cache TMDB images if fetched successfully
+        if (needTmdbFetch && tmdbResult != null)
         {
-            tmdbResult = await FetchTmdbDataAsync(oriTitle, cancellationToken);
+            var posterUrl = anime.TryGetProperty("images", out var imgProp) && imgProp.ValueKind != JsonValueKind.Null &&
+                          imgProp.TryGetProperty("large", out var largeImage) && largeImage.ValueKind != JsonValueKind.Null
+                          ? largeImage.GetString()
+                          : null;
 
-            // Cache the images if fetched successfully
-            if (tmdbResult != null)
-            {
-                var posterUrl = anime.TryGetProperty("images", out var imgProp) && imgProp.ValueKind != JsonValueKind.Null &&
-                              imgProp.TryGetProperty("large", out var largeImage) && largeImage.ValueKind != JsonValueKind.Null
-                              ? largeImage.GetString()
-                              : null;
+            await _cacheService.CacheAnimeImagesAsync(
+                bangumiId,
+                posterUrl,
+                tmdbResult.BackdropUrl,
+                null).ConfigureAwait(false);
 
-                await _cacheService.CacheAnimeImagesAsync(
-                    bangumiId,
-                    posterUrl,
-                    tmdbResult.BackdropUrl,
-                    null);
-
-                backdropUrl = tmdbResult.BackdropUrl;
-                _logger.LogInformation("Cached images for {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
-            }
+            backdropUrl = tmdbResult.BackdropUrl;
+            _logger.LogInformation("Cached images for {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
         }
-        else
+        else if (!needTmdbFetch)
         {
             _logger.LogInformation("Using cached images for {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
         }
-
-        // Fetch AniList data
-        var anilistResult = await FetchAniListDataAsync(oriTitle, cancellationToken);
 
         // Build enriched anime DTO (strongly typed)
         var portraitUrl = anime.TryGetProperty("images", out var images) && images.ValueKind != JsonValueKind.Null &&
