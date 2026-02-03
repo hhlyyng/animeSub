@@ -4,6 +4,178 @@
 
 ---
 
+## 2026-02-03
+
+### Backend 运行时 Bug 修复
+
+#### 改动概述
+
+修复了 backend 重构后的多个运行时问题，确保服务能正常启动并正确返回 TMDB 横向背景图片。
+
+#### 修复列表
+
+| 问题 | 文件 | 修复方案 |
+|------|------|----------|
+| DI 生命周期冲突 | `Program.cs` | `AnimeCacheService` 从 Singleton 改为 Scoped |
+| 响应开始后修改 Headers | `ExceptionHandlerMiddleware.cs` | 添加 `HasStarted` 检查 |
+| 响应开始后添加 Header | `PerformanceMonitoringMiddleware.cs` | 添加 `HasStarted` 检查 |
+| `/health` 路由重复定义 | `Program.cs` | 移除 minimal API 中的重复端点 |
+| HttpClient BaseAddress URL 解析错误 | `ApiClientBase.cs` | 确保 BaseAddress 以 `/` 结尾 |
+| 相对 URL 路径被覆盖 | `TMDBClient.cs`, `BangumiClient.cs` | 移除 URL 开头的 `/` |
+| 数据库外键约束失败 | `AnimeDbContext.cs`, Entities | 移除 AnimeImages 到 AnimeInfo 的外键约束 |
+
+#### 问题详解
+
+##### 1. DI 生命周期冲突
+
+**问题**: `AnimeCacheService` 注册为 Singleton，但依赖了 Scoped 的 `IAnimeRepository`，导致启动失败。
+
+**错误信息**:
+```
+Cannot consume scoped service 'IAnimeRepository' from singleton 'IAnimeCacheService'
+```
+
+**修复**:
+```csharp
+// 修改前
+builder.Services.AddSingleton<IAnimeCacheService, AnimeCacheService>();
+
+// 修改后
+builder.Services.AddScoped<IAnimeCacheService, AnimeCacheService>();
+```
+
+##### 2. 响应开始后修改 Headers
+
+**问题**: 中间件在响应已经开始发送后尝试修改 headers，导致异常。
+
+**错误信息**:
+```
+System.InvalidOperationException: Headers are read-only, response has already started.
+```
+
+**修复**: 在修改 headers 前检查 `context.Response.HasStarted`
+
+```csharp
+// ExceptionHandlerMiddleware.cs
+if (context.Response.HasStarted)
+{
+    _logger.LogWarning("Response has already started, cannot write error response");
+    return;
+}
+
+// PerformanceMonitoringMiddleware.cs
+if (!context.Response.HasStarted)
+{
+    context.Response.Headers.TryAdd("X-Response-Time-Ms", elapsedMs.ToString());
+}
+```
+
+##### 3. HttpClient BaseAddress URL 解析问题
+
+**问题**: .NET HttpClient 在处理相对 URL 时有特殊行为：
+- BaseAddress: `https://api.themoviedb.org/3` (无尾部斜杠)
+- 相对 URL: `/search/tv` (以斜杠开头)
+- 结果: `https://api.themoviedb.org/search/tv` (丢失 `/3`)
+
+**原因**: 以 `/` 开头的相对 URL 被视为绝对路径，会覆盖 BaseAddress 的路径部分。
+
+**修复**:
+```csharp
+// ApiClientBase.cs - 确保 BaseAddress 以斜杠结尾
+if (!baseUrl.EndsWith('/'))
+    baseUrl += '/';
+HttpClient.BaseAddress = new Uri(baseUrl);
+
+// TMDBClient.cs - 相对 URL 不以斜杠开头
+var url = $"search/tv?query={Uri.EscapeDataString(title)}&language={language}";
+```
+
+##### 4. 数据库外键约束
+
+**问题**: `AnimeImagesEntity` 定义了到 `AnimeInfoEntity` 的外键，但代码尝试单独插入 Images 时，对应的 AnimeInfo 记录不存在。
+
+**错误信息**:
+```
+SQLite Error 19: 'FOREIGN KEY constraint failed'
+```
+
+**修复**: 移除外键约束，让两个表独立存储
+
+```csharp
+// AnimeDbContext.cs - 移除外键配置
+modelBuilder.Entity<AnimeImagesEntity>(entity =>
+{
+    entity.HasKey(e => e.BangumiId);
+    // 移除 HasOne...WithOne...HasForeignKey 配置
+});
+```
+
+#### 后端架构总结
+
+```
+backend/
+├── Controllers/
+│   ├── AnimeController.cs      # GET /api/anime/today
+│   ├── SettingsController.cs   # GET/PUT/DELETE /api/settings/tokens
+│   └── HealthController.cs     # GET /health, /health/dependencies
+├── Services/
+│   ├── ApiClientBase.cs        # HTTP 客户端基类（统一错误处理、日志）
+│   ├── Implementations/
+│   │   ├── BangumiClient.cs    # Bangumi API 客户端
+│   │   ├── TMDBClient.cs       # TMDB API 客户端
+│   │   ├── AniListClient.cs    # AniList GraphQL 客户端
+│   │   └── AnimeAggregationService.cs  # 数据聚合服务
+│   ├── TokenStorageService.cs  # Token 加密存储
+│   ├── AnimeCacheService.cs    # 两级缓存（Memory + SQLite）
+│   └── ResilienceService.cs    # Polly 重试策略
+├── Middleware/
+│   ├── ExceptionHandlerMiddleware.cs   # 全局异常处理
+│   ├── CorrelationIdMiddleware.cs      # 请求追踪
+│   ├── PerformanceMonitoringMiddleware.cs  # 性能监控
+│   └── RequestResponseLoggingMiddleware.cs # 请求日志
+├── Data/
+│   ├── AnimeDbContext.cs       # EF Core SQLite 上下文
+│   └── Entities/               # 数据库实体
+└── Models/
+    ├── Configuration/          # 配置类
+    └── Dtos/                   # 数据传输对象
+```
+
+#### Token 管理机制
+
+**优先级**: 后端配置存储 > HTTP Headers (fallback)
+
+```csharp
+// AnimeController.cs
+var bangumiToken = await _tokenStorage.GetBangumiTokenAsync()
+    ?? Request.Headers["X-Bangumi-Token"].FirstOrDefault();
+```
+
+**存储方式**:
+- 文件: `appsettings.user.json`
+- 加密: ASP.NET Core Data Protection API
+- 密钥: `backend/.keys/`
+
+**API 端点**:
+- `GET /api/settings/tokens` - 查看配置状态
+- `PUT /api/settings/tokens` - 保存 tokens
+- `DELETE /api/settings/tokens` - 删除 tokens
+
+#### 相关文件
+
+- `backend/Program.cs`
+- `backend/Middleware/ExceptionHandlerMiddleware.cs`
+- `backend/Middleware/PerformanceMonitoringMiddleware.cs`
+- `backend/Services/ApiClientBase.cs`
+- `backend/Services/Implementations/TMDBClient.cs`
+- `backend/Services/Implementations/BangumiClient.cs`
+- `backend/Data/AnimeDbContext.cs`
+- `backend/Data/Entities/AnimeImagesEntity.cs`
+- `backend/Data/Entities/AnimeInfoEntity.cs`
+- `backend/Services/Repositories/AnimeRepository.cs`
+
+---
+
 ## 2026-02-02
 
 ### AnimeDetailModal 优化重构
