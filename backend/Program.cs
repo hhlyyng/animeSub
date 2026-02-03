@@ -73,6 +73,9 @@ builder.Services.AddHttpClient("anilist-client")
 builder.Services.AddHttpClient("qbittorrent-client")
     .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromSeconds(30));
 
+builder.Services.AddHttpClient("mikan-client")
+    .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromSeconds(30));
+
 // Register clients via factory functions with configuration injection
 builder.Services.AddScoped<IBangumiClient>(sp =>
 {
@@ -106,6 +109,14 @@ builder.Services.AddScoped<IQBittorrentService>(sp =>
     return new backend.Services.Implementations.QBittorrentService(factory.CreateClient("qbittorrent-client"), logger, config);
 });
 
+builder.Services.AddScoped<IMikanClient>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.MikanClient>>();
+    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<backend.Models.Configuration.MikanConfiguration>>();
+    return new backend.Services.Implementations.MikanClient(factory.CreateClient("mikan-client"), logger, config);
+});
+
 // Register aggregation service
 builder.Services.AddScoped<IAnimeAggregationService, AnimeAggregationService>();
 
@@ -118,6 +129,13 @@ builder.Services.AddSingleton<ITokenStorageService, TokenStorageService>();
 // Register anime caching services
 builder.Services.AddScoped<IAnimeRepository, AnimeRepository>();
 builder.Services.AddScoped<IAnimeCacheService, AnimeCacheService>();
+
+// Register subscription services
+builder.Services.AddScoped<ISubscriptionRepository, SubscriptionRepository>();
+builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
+
+// Register background services
+builder.Services.AddHostedService<backend.Services.Background.RssPollingService>();
 
 // Register resilience service (Polly retry policies)
 builder.Services.AddSingleton<IResilienceService, ResilienceService>();
@@ -188,6 +206,10 @@ app.MapGet("/", (backend.Services.HealthCheckService healthCheck) =>
         endpoints = new[]
         {
             "GET /api/anime/today - Get today's anime schedule",
+            "GET /api/subscription - Get all subscriptions",
+            "POST /api/subscription - Create subscription",
+            "POST /api/subscription/{id}/check - Manual RSS check",
+            "POST /api/subscription/check-all - Check all subscriptions",
             "GET /health - Comprehensive health check",
             "GET /health/live - Liveness probe",
             "GET /health/ready - Readiness probe"
