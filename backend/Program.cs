@@ -4,6 +4,7 @@ using Serilog;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using backend.Data;
+using backend.Models.Configuration;
 using backend.Services;
 using backend.Services.Interfaces;
 using backend.Services.Implementations;
@@ -32,6 +33,10 @@ Log.Logger = new LoggerConfiguration()
     .CreateLogger();
 
 builder.Host.UseSerilog();
+
+// Bind API configuration from appsettings.json
+builder.Services.Configure<ApiConfiguration>(
+    builder.Configuration.GetSection(ApiConfiguration.SectionName));
 
 // Add controllers
 builder.Services.AddControllers();
@@ -62,26 +67,29 @@ builder.Services.AddHttpClient("anilist-client")
 builder.Services.AddHttpClient("qbittorrent-client")
     .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromSeconds(30));
 
-// Register clients via factory functions with fully qualified names
+// Register clients via factory functions with configuration injection
 builder.Services.AddScoped<IBangumiClient>(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.BangumiClient>>();
-    return new backend.Services.Implementations.BangumiClient(factory.CreateClient("bangumi-client"), logger);
+    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ApiConfiguration>>();
+    return new backend.Services.Implementations.BangumiClient(factory.CreateClient("bangumi-client"), logger, config);
 });
 
 builder.Services.AddScoped<ITMDBClient>(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.TMDBClient>>();
-    return new backend.Services.Implementations.TMDBClient(factory.CreateClient("tmdb-client"), logger);
+    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ApiConfiguration>>();
+    return new backend.Services.Implementations.TMDBClient(factory.CreateClient("tmdb-client"), logger, config);
 });
 
 builder.Services.AddScoped<IAniListClient>(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.AniListClient>>();
-    return new backend.Services.Implementations.AniListClient(factory.CreateClient("anilist-client"), logger);
+    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ApiConfiguration>>();
+    return new backend.Services.Implementations.AniListClient(factory.CreateClient("anilist-client"), logger, config);
 });
 
 builder.Services.AddScoped<IQBittorrentService>(sp =>

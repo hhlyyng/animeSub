@@ -1,5 +1,7 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 using backend.Models;
+using backend.Models.Configuration;
 using backend.Services.Interfaces;
 
 namespace backend.Services.Implementations
@@ -9,13 +11,17 @@ namespace backend.Services.Implementations
     /// </summary>
     public class TMDBClient : ApiClientBase<TMDBClient>, ITMDBClient
     {
-        private const string BaseUrl = "https://api.themoviedb.org/3";
-        private const string ImageBaseUrl = "https://image.tmdb.org/t/p/";
+        private readonly string _imageBaseUrl;
 
-        public TMDBClient(HttpClient httpClient, ILogger<TMDBClient> logger)
-            : base(httpClient, logger, BaseUrl)
+        public TMDBClient(
+            HttpClient httpClient,
+            ILogger<TMDBClient> logger,
+            IOptions<ApiConfiguration> config)
+            : base(httpClient, logger, config.Value.TMDB.BaseUrl)
         {
+            _imageBaseUrl = config.Value.TMDB.ImageBaseUrl;
             HttpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+            HttpClient.Timeout = TimeSpan.FromSeconds(config.Value.TMDB.TimeoutSeconds);
         }
 
         public override void SetToken(string? token)
@@ -70,7 +76,7 @@ namespace backend.Services.Implementations
                 {
                     string? path = bp.GetString();
                     if (!string.IsNullOrWhiteSpace(path))
-                        backdropUrl = $"{ImageBaseUrl}original{path}";
+                        backdropUrl = $"{_imageBaseUrl}original{path}";
                 }
 
                 string enTitle = enTitleFromSearch ?? "";
@@ -164,7 +170,7 @@ namespace backend.Services.Implementations
                     foreach (var image in images.EnumerateArray())
                     {
                         var filePath = image.GetProperty("file_path").GetString();
-                        imageUrls.Add($"{ImageBaseUrl}{size}{filePath}");
+                        imageUrls.Add($"{_imageBaseUrl}{size}{filePath}");
                     }
                 }
 
@@ -187,7 +193,7 @@ namespace backend.Services.Implementations
                     foreach (var image in images.EnumerateArray())
                     {
                         var filePath = image.GetProperty("file_path").GetString();
-                        imageUrls.Add($"{ImageBaseUrl}{size}{filePath}");
+                        imageUrls.Add($"{_imageBaseUrl}{size}{filePath}");
                     }
                 }
 
@@ -209,7 +215,7 @@ namespace backend.Services.Implementations
                     foreach (var profile in profiles.EnumerateArray())
                     {
                         var filePath = profile.GetProperty("file_path").GetString();
-                        profileUrls.Add($"{ImageBaseUrl}{size}{filePath}");
+                        profileUrls.Add($"{_imageBaseUrl}{size}{filePath}");
                     }
                 }
 

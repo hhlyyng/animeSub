@@ -2642,9 +2642,80 @@ anilistResult = await anilistTask;
 
 ---
 
-## 后续阶段
+## Phase 11: Configuration Management
 
-Phase 11 (Configuration Management) 可选实施...
+**状态**: ✅ 已完成
+**完成时间**: 2026-02-03
+
+### 📌 问题诊断
+
+```csharp
+// ❌ Before: 硬编码
+private const string Endpoint = "https://api.bgm.tv";
+private const string BaseUrl = "https://api.themoviedb.org/3";
+```
+
+### 🎯 解决方案
+
+**1. 配置 POCO 类** (`Models/Configuration/ApiConfiguration.cs`)
+```csharp
+public class ApiConfiguration
+{
+    public BangumiConfig Bangumi { get; set; }
+    public TMDBConfig TMDB { get; set; }
+    public AniListConfig AniList { get; set; }
+}
+```
+
+**2. appsettings.json**
+```json
+{
+  "ApiConfiguration": {
+    "Bangumi": { "BaseUrl": "https://api.bgm.tv", "TimeoutSeconds": 30 },
+    "TMDB": { "BaseUrl": "https://api.themoviedb.org/3", "ImageBaseUrl": "...", "TimeoutSeconds": 30 },
+    "AniList": { "BaseUrl": "https://graphql.anilist.co", "TimeoutSeconds": 30 }
+  }
+}
+```
+
+**3. 通过 IOptions<T> 注入**
+```csharp
+public BangumiClient(HttpClient http, ILogger logger, IOptions<ApiConfiguration> config)
+    : base(http, logger, config.Value.Bangumi.BaseUrl)
+{
+    HttpClient.Timeout = TimeSpan.FromSeconds(config.Value.Bangumi.TimeoutSeconds);
+}
+```
+
+### ✅ Phase 11 验收清单
+
+- [x] 创建 `ApiConfiguration` POCO 类
+- [x] 更新 `appsettings.json` 配置
+- [x] Program.cs 绑定配置
+- [x] BangumiClient 使用 IOptions
+- [x] TMDBClient 使用 IOptions
+- [x] AniListClient 使用 IOptions
+- [x] 项目编译通过
+
+---
+
+## 🎉 重构完成
+
+**全部 11 个 Phase 已完成！**
+
+| Phase | 状态 | 核心改进 |
+|-------|------|---------|
+| 1 | ✅ | DI 架构 |
+| 2 | ✅ | 错误处理 |
+| 3 | ✅ | 结构化日志 |
+| 4 | ✅ | Token 管理 |
+| 5 | ✅ | Polly 重试 |
+| 6 | ✅ | 两层缓存 |
+| 7 | ✅ | 强类型 DTO |
+| 8 | ✅ | 单元测试 |
+| 9 | ✅ | 代码组织 |
+| 10 | ✅ | 并行请求 |
+| 11 | ✅ | 配置管理 |
 
 ---
 
@@ -2653,12 +2724,9 @@ Phase 11 (Configuration Management) 可选实施...
 - [ASP.NET Core Dependency Injection](https://docs.microsoft.com/en-us/aspnet/core/fundamentals/dependency-injection)
 - [HttpClient Best Practices](https://docs.microsoft.com/en-us/dotnet/architecture/microservices/implement-resilient-applications/use-httpclientfactory-to-implement-resilient-http-requests)
 - [Serilog Best Practices](https://github.com/serilog/serilog/wiki/Configuration-Basics)
-- [Generic Host](https://docs.microsoft.com/en-us/aspnet/core/fundamentals/host/generic-host)
-- [xUnit Documentation](https://xunit.net/docs/getting-started/netcore/cmdline)
-- [Moq Quickstart](https://github.com/moq/moq4/wiki/Quickstart)
-- [Task.WhenAll](https://docs.microsoft.com/en-us/dotnet/api/system.threading.tasks.task.whenall)
+- [IOptions Pattern](https://docs.microsoft.com/en-us/aspnet/core/fundamentals/configuration/options)
 
 ---
 
 **最后更新**: 2026-02-03
-**下一步**: Phase 11 - Configuration Management (可选)
+**重构状态**: ✅ 全部完成

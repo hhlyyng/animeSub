@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
+using backend.Models.Configuration;
 using backend.Services.Interfaces;
 
 namespace backend.Services.Implementations
@@ -8,13 +10,15 @@ namespace backend.Services.Implementations
     /// </summary>
     public class BangumiClient : ApiClientBase<BangumiClient>, IBangumiClient
     {
-        private const string Endpoint = "https://api.bgm.tv";
-
-        public BangumiClient(HttpClient httpClient, ILogger<BangumiClient> logger)
-            : base(httpClient, logger, Endpoint)
+        public BangumiClient(
+            HttpClient httpClient,
+            ILogger<BangumiClient> logger,
+            IOptions<ApiConfiguration> config)
+            : base(httpClient, logger, config.Value.Bangumi.BaseUrl)
         {
             HttpClient.DefaultRequestHeaders.Add("Accept", "application/json");
             HttpClient.DefaultRequestHeaders.Add("User-Agent", "Anime-Sub (https://github.com/hhlyyng/anime-subscription)");
+            HttpClient.Timeout = TimeSpan.FromSeconds(config.Value.Bangumi.TimeoutSeconds);
         }
 
         public Task<JsonElement> GetDailyBroadcastAsync() =>

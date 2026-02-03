@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 using backend.Models;
+using backend.Models.Configuration;
 using backend.Services.Interfaces;
 
 namespace backend.Services.Implementations
@@ -10,13 +12,15 @@ namespace backend.Services.Implementations
     /// </summary>
     public class AniListClient : ApiClientBase<AniListClient>, IAniListClient
     {
-        private const string Endpoint = "https://graphql.anilist.co";
-
-        public AniListClient(HttpClient httpClient, ILogger<AniListClient> logger)
-            : base(httpClient, logger, Endpoint)
+        public AniListClient(
+            HttpClient httpClient,
+            ILogger<AniListClient> logger,
+            IOptions<ApiConfiguration> config)
+            : base(httpClient, logger, config.Value.AniList.BaseUrl)
         {
             HttpClient.DefaultRequestHeaders.Add("Accept", "application/json");
             HttpClient.DefaultRequestHeaders.Add("User-Agent", "Anime-Sub");
+            HttpClient.Timeout = TimeSpan.FromSeconds(config.Value.AniList.TimeoutSeconds);
         }
 
         public Task<AniListAnimeInfo?> GetAnimeInfoAsync(string japaneseTitle) =>
