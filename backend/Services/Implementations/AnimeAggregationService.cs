@@ -220,10 +220,15 @@ public class AnimeAggregationService : IAnimeAggregationService
                 ? scoreEl.GetDouble().ToString("F1")
                 : "0";
 
+        // Get air date for TMDB season matching (format: YYYY-MM-DD)
+        var airDate = anime.TryGetProperty("date", out var dateEl) && dateEl.ValueKind != JsonValueKind.Null
+            ? dateEl.GetString()
+            : null;
+
         _logger.LogInformation("Processing anime: {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
 
         // Fetch full subject detail if summary is empty (calendar API doesn't include summary)
-        if (string.IsNullOrEmpty(chDesc) || string.IsNullOrEmpty(chTitle))
+        if (string.IsNullOrEmpty(chDesc) || string.IsNullOrEmpty(chTitle) || string.IsNullOrEmpty(airDate))
         {
             try
             {
@@ -244,6 +249,14 @@ public class AnimeAggregationService : IAnimeAggregationService
                     chTitle = detailNameCn.GetString() ?? "";
                     _logger.LogInformation("Fetched Chinese title from subject detail for {Title}", oriTitle);
                 }
+
+                if (string.IsNullOrEmpty(airDate) &&
+                    subjectDetail.TryGetProperty("date", out var detailDate) &&
+                    detailDate.ValueKind != JsonValueKind.Null)
+                {
+                    airDate = detailDate.GetString();
+                    _logger.LogInformation("Fetched air date from subject detail for {Title}: {AirDate}", oriTitle, airDate);
+                }
             }
             catch (Exception ex)
             {
@@ -261,7 +274,7 @@ public class AnimeAggregationService : IAnimeAggregationService
         var needTmdbFetch = cachedImages == null || string.IsNullOrEmpty(cachedImages.BackdropUrl);
 
         var tmdbTask = needTmdbFetch
-            ? FetchTmdbDataAsync(oriTitle, cancellationToken)
+            ? FetchTmdbDataAsync(oriTitle, airDate, cancellationToken)
             : Task.FromResult<Models.TMDBAnimeInfo?>(null);
         var anilistTask = FetchAniListDataAsync(oriTitle, cancellationToken);
 
@@ -324,11 +337,11 @@ public class AnimeAggregationService : IAnimeAggregationService
         };
     }
 
-    private async Task<Models.TMDBAnimeInfo?> FetchTmdbDataAsync(string title, CancellationToken cancellationToken)
+    private async Task<Models.TMDBAnimeInfo?> FetchTmdbDataAsync(string title, string? airDate, CancellationToken cancellationToken)
     {
         try
         {
-            return await _tmdbClient.GetAnimeSummaryAndBackdropAsync(title);
+            return await _tmdbClient.GetAnimeSummaryAndBackdropAsync(title, airDate);
         }
         catch (Exception ex)
         {

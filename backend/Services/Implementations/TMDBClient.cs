@@ -36,7 +36,7 @@ namespace backend.Services.Implementations
             base.SetToken(token);
         }
 
-        public Task<TMDBAnimeInfo?> GetAnimeSummaryAndBackdropAsync(string title) =>
+        public Task<TMDBAnimeInfo?> GetAnimeSummaryAndBackdropAsync(string title, string? airDate = null) =>
             ExecuteWithGracefulFallbackAsync(async () =>
             {
                 if (string.IsNullOrWhiteSpace(title))
@@ -48,8 +48,23 @@ namespace backend.Services.Implementations
                     return null;
                 }
 
+                // Extract year from airDate (format: YYYY-MM-DD)
+                int? year = null;
+                if (!string.IsNullOrEmpty(airDate) && airDate.Length >= 4)
+                {
+                    if (int.TryParse(airDate.Substring(0, 4), out var y))
+                        year = y;
+                }
+
                 const string language = "en-US";
                 var url = $"search/tv?query={Uri.EscapeDataString(title)}&language={language}&page=1&include_adult=false";
+
+                // Add year filter if available
+                if (year.HasValue)
+                {
+                    url += $"&first_air_date_year={year}";
+                    Logger.LogInformation("Searching TMDB with year filter: {Year}", year);
+                }
 
                 using var resp = await HttpClient.GetAsync(url);
                 resp.EnsureSuccessStatusCode();
@@ -190,6 +205,82 @@ namespace backend.Services.Implementations
                                 zhTitle = zhNameEl.GetString() ?? zhTitle;
                             if (zhData.TryGetProperty("overview", out var zhOvEl))
                                 zhOverview = zhOvEl.GetString() ?? zhOverview;
+                        }
+                    }
+
+                    // Try to get season-specific backdrop for multi-season anime
+                    if (year.HasValue)
+                    {
+                        try
+                        {
+                            var detailUrl = $"tv/{tvId}";
+                            using var detailResp = await HttpClient.GetAsync(detailUrl);
+
+                            if (detailResp.IsSuccessStatusCode)
+                            {
+                                using var detailStream = await detailResp.Content.ReadAsStreamAsync();
+                                using var detailDoc = await JsonDocument.ParseAsync(detailStream);
+
+                                if (detailDoc.RootElement.TryGetProperty("seasons", out var seasons) &&
+                                    seasons.ValueKind == JsonValueKind.Array)
+                                {
+                                    foreach (var season in seasons.EnumerateArray())
+                                    {
+                                        var seasonAirDate = season.TryGetProperty("air_date", out var sad)
+                                            ? sad.GetString()
+                                            : null;
+
+                                        // Match season by year
+                                        if (!string.IsNullOrEmpty(seasonAirDate) &&
+                                            seasonAirDate.StartsWith(year.Value.ToString()))
+                                        {
+                                            int seasonNumber = season.TryGetProperty("season_number", out var sn)
+                                                ? sn.GetInt32()
+                                                : 0;
+
+                                            // Skip season 0 (specials)
+                                            if (seasonNumber == 0)
+                                                continue;
+
+                                            // Try to get season-specific images
+                                            var seasonImgUrl = $"tv/{tvId}/season/{seasonNumber}/images";
+                                            using var seasonImgResp = await HttpClient.GetAsync(seasonImgUrl);
+
+                                            if (seasonImgResp.IsSuccessStatusCode)
+                                            {
+                                                using var seasonImgStream = await seasonImgResp.Content.ReadAsStreamAsync();
+                                                using var seasonImgDoc = await JsonDocument.ParseAsync(seasonImgStream);
+
+                                                // Try to get backdrop from season posters
+                                                if (seasonImgDoc.RootElement.TryGetProperty("posters", out var posters) &&
+                                                    posters.ValueKind == JsonValueKind.Array &&
+                                                    posters.GetArrayLength() > 0)
+                                                {
+                                                    var firstPoster = posters[0];
+                                                    if (firstPoster.TryGetProperty("file_path", out var fp) &&
+                                                        fp.ValueKind == JsonValueKind.String)
+                                                    {
+                                                        string? posterPath = fp.GetString();
+                                                        if (!string.IsNullOrWhiteSpace(posterPath))
+                                                        {
+                                                            // Note: Season images are typically posters, not backdrops
+                                                            // We keep the series backdrop but log that we found a season match
+                                                            Logger.LogInformation(
+                                                                "Found matching season {SeasonNumber} for year {Year} in '{Title}'",
+                                                                seasonNumber, year, title);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "Failed to fetch season details for TV ID {TvId}", tvId);
                         }
                     }
                 }

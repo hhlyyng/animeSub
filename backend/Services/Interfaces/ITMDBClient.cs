@@ -10,7 +10,9 @@ public interface ITMDBClient
     /// <summary>
     /// Get anime summary and backdrop URL from TMDB by title
     /// </summary>
-    Task<TMDBAnimeInfo?> GetAnimeSummaryAndBackdropAsync(string title);
+    /// <param name="title">The anime title to search for</param>
+    /// <param name="airDate">Optional air date (YYYY-MM-DD) for year filtering and season matching</param>
+    Task<TMDBAnimeInfo?> GetAnimeSummaryAndBackdropAsync(string title, string? airDate = null);
 
     /// <summary>
     /// Get movie images (posters, backdrops, logos)
