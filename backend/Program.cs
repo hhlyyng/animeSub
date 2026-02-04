@@ -80,6 +80,9 @@ builder.Services.AddHttpClient("qbittorrent-client")
 builder.Services.AddHttpClient("mikan-client")
     .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromSeconds(30));
 
+builder.Services.AddHttpClient("jikan-client")
+    .ConfigureHttpClient(client => client.Timeout = TimeSpan.FromSeconds(30));
+
 // Register clients via factory functions with configuration injection
 builder.Services.AddScoped<IBangumiClient>(sp =>
 {
@@ -119,6 +122,14 @@ builder.Services.AddScoped<IMikanClient>(sp =>
     var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.MikanClient>>();
     var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<backend.Models.Configuration.MikanConfiguration>>();
     return new backend.Services.Implementations.MikanClient(factory.CreateClient("mikan-client"), logger, config);
+});
+
+builder.Services.AddScoped<IJikanClient>(sp =>
+{
+    var factory = sp.GetRequiredService<IHttpClientFactory>();
+    var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.JikanClient>>();
+    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ApiConfiguration>>();
+    return new backend.Services.Implementations.JikanClient(factory.CreateClient("jikan-client"), logger, config);
 });
 
 // Register aggregation service
