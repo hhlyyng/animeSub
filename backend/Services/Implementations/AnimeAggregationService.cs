@@ -312,16 +312,65 @@ public class AnimeAggregationService : IAnimeAggregationService
                 ? large.GetString() ?? ""
                 : "";
 
+        // Determine final titles with fallback
+        var jpTitle = containsJapaneseInOriTitle ? oriTitle : "";
+        var finalChTitle = containsPureChineseInOriTitle ? oriTitle : chTitle;
+        var finalEnTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "";
+
+        // Skip anime if no valid title available
+        if (string.IsNullOrEmpty(jpTitle) && string.IsNullOrEmpty(finalChTitle) && string.IsNullOrEmpty(finalEnTitle))
+        {
+            _logger.LogWarning("Skipping anime (BangumiId: {BangumiId}) - no valid title available", bangumiId);
+            return null;
+        }
+
+        // Check if Bangumi summary contains Japanese (hiragana/katakana)
+        // If so, it's not a valid Chinese description
+        bool bangumiDescIsJapanese = !string.IsNullOrEmpty(chDesc) &&
+            System.Text.RegularExpressions.Regex.IsMatch(chDesc, @"[\p{IsHiragana}\p{IsKatakana}]");
+
+        // Build Chinese description with fallback chain
+        string finalChDesc;
+        if (!string.IsNullOrEmpty(chDesc) && !bangumiDescIsJapanese)
+        {
+            // Bangumi has valid Chinese description
+            finalChDesc = chDesc;
+        }
+        else if (!string.IsNullOrEmpty(tmdbResult?.ChineseSummary))
+        {
+            // Fallback to TMDB Chinese
+            finalChDesc = tmdbResult.ChineseSummary;
+        }
+        else
+        {
+            // No Chinese description available
+            finalChDesc = "无可用中文介绍";
+        }
+
+        // Build English description with fallback chain
+        string finalEnDesc;
+        if (!string.IsNullOrEmpty(tmdbResult?.EnglishSummary))
+        {
+            finalEnDesc = tmdbResult.EnglishSummary;
+        }
+        else if (!string.IsNullOrEmpty(anilistResult?.EnglishSummary))
+        {
+            finalEnDesc = anilistResult.EnglishSummary;
+        }
+        else
+        {
+            // No English description available
+            finalEnDesc = "No English description available";
+        }
+
         return new AnimeInfoDto
         {
             BangumiId = bangumiId.ToString(),
-            JpTitle = containsJapaneseInOriTitle ? oriTitle : "",
-            ChTitle = containsPureChineseInOriTitle ? oriTitle : chTitle,
-            EnTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "",
-            ChDesc = !string.IsNullOrEmpty(chDesc)
-                ? chDesc
-                : (tmdbResult?.ChineseSummary ?? ""),
-            EnDesc = tmdbResult?.EnglishSummary ?? anilistResult?.EnglishSummary ?? "",
+            JpTitle = jpTitle,
+            ChTitle = finalChTitle,
+            EnTitle = finalEnTitle,
+            ChDesc = finalChDesc,
+            EnDesc = finalEnDesc,
             Score = score,
             Images = new AnimeImagesDto
             {
