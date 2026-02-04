@@ -6,6 +6,94 @@
 
 ## 2026-02-04
 
+### Top 10 AnimeFlow 功能
+
+#### 改动概述
+
+新增 3 个 AnimeFlow 组件展示不同信源的 Top 10 动漫排行：
+- **Bangumi Top 10** - 来自 Bangumi 评分排行
+- **AniList Top 10** - 来自 AniList 趋势排行
+- **MAL Top 10** - 来自 MyAnimeList 排行（通过 Jikan API）
+
+#### 新增 API 端点
+
+| Method | Endpoint | 数据来源 |
+|--------|----------|----------|
+| GET | `/api/anime/top/bangumi` | Bangumi 评分排行 |
+| GET | `/api/anime/top/anilist` | AniList 趋势排行 |
+| GET | `/api/anime/top/mal` | MyAnimeList 排行 (Jikan API) |
+
+#### 新增文件
+
+**后端**
+| 文件 | 说明 |
+|------|------|
+| `backend/Services/Interfaces/IJikanClient.cs` | Jikan 客户端接口 |
+| `backend/Services/Implementations/JikanClient.cs` | Jikan 客户端实现 |
+| `backend/Models/Jikan/JikanModels.cs` | Jikan 数据模型 |
+
+**测试**
+| 文件 | 说明 |
+|------|------|
+| `backend.Tests/Unit/Services/JikanClientTests.cs` | Jikan 客户端测试 |
+| `backend.Tests/Unit/Services/BangumiClientTopTests.cs` | Bangumi Top 10 测试 |
+| `backend.Tests/Unit/Services/AniListClientTrendingTests.cs` | AniList Trending 测试 |
+
+#### 修改文件
+
+**后端**
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/Services/Interfaces/IBangumiClient.cs` | 新增 `SearchTopSubjectsAsync` |
+| `backend/Services/Implementations/BangumiClient.cs` | 实现 Top 10 搜索 |
+| `backend/Services/Interfaces/IAniListClient.cs` | 新增 `GetTrendingAnimeAsync` |
+| `backend/Services/Implementations/AniListClient.cs` | 实现 GraphQL 趋势查询 |
+| `backend/Models/AniListAnimeInfo.cs` | 新增 NativeTitle、Score、BannerImage 属性 |
+| `backend/Services/Interfaces/IAnimeAggregationService.cs` | 新增 3 个 Top 10 方法 |
+| `backend/Services/Implementations/AnimeAggregationService.cs` | 实现 Top 10 聚合 |
+| `backend/Controllers/AnimeController.cs` | 新增 3 个 API 端点 |
+| `backend/Program.cs` | 注册 Jikan 客户端 |
+| `backend/appsettings.json` | 添加 Jikan 配置 |
+| `backend/Models/Configuration/ApiConfiguration.cs` | 添加 JikanConfig |
+| `backend/Models/Dtos/ExternalUrlsDto.cs` | 新增 Mal URL 属性 |
+
+**前端**
+| 文件 | 修改内容 |
+|------|----------|
+| `frontend/src/components/homepage/content/HomePageContent.tsx` | 新增 3 个 AnimeFlow 组件 |
+
+**测试**
+| 文件 | 修改内容 |
+|------|----------|
+| `backend.Tests/Fixtures/TestDataFactory.cs` | 新增 Jikan、AniList、Bangumi 测试数据 |
+| `backend.Tests/Unit/Services/AnimeAggregationServiceTests.cs` | 适配新的 IJikanClient 依赖 |
+| `backend.Tests/backend.Tests.csproj` | 修复目标框架为 net9.0 |
+
+#### 配置项 (appsettings.json)
+
+```json
+{
+  "ApiConfiguration": {
+    "Jikan": {
+      "BaseUrl": "https://api.jikan.moe/v4",
+      "TimeoutSeconds": 30
+    }
+  }
+}
+```
+
+#### Git 提交记录
+
+```
+76c7d6b feat(backend): add Top 10 anime clients and aggregation (Phase 1-3)
+f4809c4 feat(backend): add Top 10 API endpoints (Phase 4)
+164f17c feat(backend): register Jikan client and configuration (Phase 5)
+8ed9027 feat(frontend): add Top 10 AnimeFlow components (Phase 6)
+ebb9e43 test(backend): add unit tests for Top 10 clients (Phase 7)
+```
+
+---
+
 ### 预取架构重构
 
 #### 改动概述
