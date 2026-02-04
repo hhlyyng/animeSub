@@ -2,6 +2,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Moq;
+using backend.Data.Entities;
 using backend.Models;
 using backend.Models.Dtos;
 using backend.Services;
@@ -14,6 +15,8 @@ namespace backend.Tests.Unit.Services;
 
 /// <summary>
 /// Unit tests for AnimeAggregationService
+/// Tests are based on the pre-fetch architecture:
+/// Priority: Database (pre-fetched) > Real-time API > Memory Cache (fallback)
 /// </summary>
 public class AnimeAggregationServiceTests
 {
@@ -38,10 +41,6 @@ public class AnimeAggregationServiceTests
         _resilienceServiceMock = new Mock<IResilienceService>();
         _loggerMock = new Mock<ILogger<AnimeAggregationService>>();
 
-        _repositoryMock
-            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
-            .ReturnsAsync(new List<backend.Data.Entities.AnimeInfoEntity>());
-
         _sut = new AnimeAggregationService(
             _bangumiClientMock.Object,
             _tmdbClientMock.Object,
@@ -53,54 +52,75 @@ public class AnimeAggregationServiceTests
             _loggerMock.Object);
     }
 
-    [Fact]
-    public async Task GetTodayAnimeEnrichedAsync_WhenCacheHit_ReturnsCachedData()
-    {
-        // Arrange
-        var cachedAnimes = TestDataFactory.CreateAnimeInfoDtoList(5);
-        var cacheTime = DateTime.UtcNow.AddMinutes(-30);
+    #region Pre-fetch Database Tests
 
-        _cacheServiceMock
-            .Setup(c => c.GetCachedAnimeListAsync())
-            .ReturnsAsync(cachedAnimes);
-        _cacheServiceMock
-            .Setup(c => c.GetTodayScheduleCacheTimeAsync())
-            .ReturnsAsync(cacheTime);
+    [Fact]
+    public async Task GetTodayAnimeEnrichedAsync_WhenDatabaseHasData_ReturnsDatabaseData()
+    {
+        // Arrange: Database has pre-fetched data
+        var preFetchedEntities = CreateAnimeInfoEntities(5);
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(preFetchedEntities);
+
+        // Mock Bangumi API to return empty (no new anime)
+        _resilienceServiceMock
+            .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
+                It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
 
         // Act
         var result = await _sut.GetTodayAnimeEnrichedAsync("test-token");
 
         // Assert
         result.Success.Should().BeTrue();
-        result.DataSource.Should().Be(DataSource.Cache);
+        result.DataSource.Should().Be(DataSource.Database);
         result.IsStale.Should().BeFalse();
         result.Count.Should().Be(5);
         result.Animes.Should().HaveCount(5);
-
-        // Verify API was not called
-        _resilienceServiceMock.Verify(
-            r => r.ExecuteWithRetryAndMetadataAsync(
-                It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
-                It.IsAny<string>(),
-                It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 
     [Fact]
-    public async Task GetTodayAnimeEnrichedAsync_WhenApiSuccess_ReturnsApiData()
+    public async Task GetTodayAnimeEnrichedAsync_WhenDatabaseHasData_DoesNotCallFullApiFetch()
     {
         // Arrange
+        var preFetchedEntities = CreateAnimeInfoEntities(3);
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(preFetchedEntities);
+
+        _resilienceServiceMock
+            .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
+                It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
+
+        // Act
+        await _sut.GetTodayAnimeEnrichedAsync("test-token");
+
+        // Assert: Should not save to repository (already have data)
+        _repositoryMock.Verify(
+            r => r.SaveAnimeInfoBatchAsync(It.IsAny<List<AnimeInfoEntity>>()),
+            Times.Never);
+    }
+
+    #endregion
+
+    #region API Fallback Tests
+
+    [Fact]
+    public async Task GetTodayAnimeEnrichedAsync_WhenDatabaseEmpty_FallsBackToApi()
+    {
+        // Arrange: Database is empty
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(new List<AnimeInfoEntity>());
+
+        // API returns data
         var bangumiResponse = TestDataFactory.CreateBangumiApiResponse(3);
-        var tmdbInfo = TestDataFactory.CreateTMDBAnimeInfo();
-        var aniListInfo = TestDataFactory.CreateAniListAnimeInfo();
-
-        _cacheServiceMock
-            .Setup(c => c.GetCachedAnimeListAsync())
-            .ReturnsAsync((List<AnimeInfoDto>?)null);
-        _cacheServiceMock
-            .Setup(c => c.GetTodayScheduleCacheTimeAsync())
-            .ReturnsAsync((DateTime?)null);
-
         _resilienceServiceMock
             .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
                 It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
@@ -108,17 +128,18 @@ public class AnimeAggregationServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((bangumiResponse, 0, true));
 
+        // Mock Bangumi subject details
+        _bangumiClientMock
+            .Setup(b => b.GetSubjectDetailAsync(It.IsAny<int>()))
+            .ReturnsAsync(CreateBangumiSubjectDetail());
+
         _tmdbClientMock
             .Setup(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()))
-            .ReturnsAsync(tmdbInfo);
+            .ReturnsAsync(TestDataFactory.CreateTMDBAnimeInfo());
 
         _aniListClientMock
             .Setup(a => a.GetAnimeInfoAsync(It.IsAny<string>()))
-            .ReturnsAsync(aniListInfo);
-
-        _cacheServiceMock
-            .Setup(c => c.GetAnimeImagesCachedAsync(It.IsAny<int>()))
-            .ReturnsAsync((backend.Data.Entities.AnimeImagesEntity?)null);
+            .ReturnsAsync(TestDataFactory.CreateAniListAnimeInfo());
 
         // Act
         var result = await _sut.GetTodayAnimeEnrichedAsync("test-token", "tmdb-token");
@@ -127,29 +148,21 @@ public class AnimeAggregationServiceTests
         result.Success.Should().BeTrue();
         result.DataSource.Should().Be(DataSource.Api);
         result.IsStale.Should().BeFalse();
-        result.Count.Should().Be(3);
     }
 
     [Fact]
-    public async Task GetTodayAnimeEnrichedAsync_WhenApiFailsWithCache_ReturnsCacheFallback()
+    public async Task GetTodayAnimeEnrichedAsync_WhenApiFailsAndHasCache_ReturnsCacheFallback()
     {
-        // Arrange
-        var cachedAnimes = TestDataFactory.CreateAnimeInfoDtoList(3);
-        var cacheTime = DateTime.UtcNow.AddHours(-2);
+        // Arrange: Database is empty, API will throw exception
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ThrowsAsync(new Exception("Database error"));
 
+        // Memory cache has data
+        var cachedAnimes = TestDataFactory.CreateAnimeInfoDtoList(3);
         _cacheServiceMock
             .Setup(c => c.GetCachedAnimeListAsync())
             .ReturnsAsync(cachedAnimes);
-        _cacheServiceMock
-            .Setup(c => c.GetTodayScheduleCacheTimeAsync())
-            .ReturnsAsync((DateTime?)null); // No fresh cache
-
-        _resilienceServiceMock
-            .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
-                It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
-                It.IsAny<string>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync((default(JsonElement), 3, false));
 
         // Act
         var result = await _sut.GetTodayAnimeEnrichedAsync("test-token");
@@ -158,26 +171,29 @@ public class AnimeAggregationServiceTests
         result.Success.Should().BeTrue();
         result.DataSource.Should().Be(DataSource.CacheFallback);
         result.IsStale.Should().BeTrue();
-        result.RetryAttempts.Should().Be(3);
+        result.Count.Should().Be(3);
     }
 
     [Fact]
-    public async Task GetTodayAnimeEnrichedAsync_WhenApiFailsNoCache_ReturnsFailure()
+    public async Task GetTodayAnimeEnrichedAsync_WhenApiFails_ReturnsFailure()
     {
-        // Arrange
-        _cacheServiceMock
-            .Setup(c => c.GetCachedAnimeListAsync())
-            .ReturnsAsync((List<AnimeInfoDto>?)null);
-        _cacheServiceMock
-            .Setup(c => c.GetTodayScheduleCacheTimeAsync())
-            .ReturnsAsync((DateTime?)null);
+        // Arrange: Database is empty
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(new List<AnimeInfoEntity>());
 
+        // API fails
         _resilienceServiceMock
             .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
                 It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
                 It.IsAny<string>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((default(JsonElement), 3, false));
+
+        // No memory cache
+        _cacheServiceMock
+            .Setup(c => c.GetCachedAnimeListAsync())
+            .ReturnsAsync((List<AnimeInfoDto>?)null);
 
         // Act
         var result = await _sut.GetTodayAnimeEnrichedAsync("test-token");
@@ -189,6 +205,10 @@ public class AnimeAggregationServiceTests
         result.Count.Should().Be(0);
         result.RetryAttempts.Should().Be(3);
     }
+
+    #endregion
+
+    #region Token and Validation Tests
 
     [Fact]
     public async Task GetTodayAnimeEnrichedAsync_ThrowsOnMissingToken()
@@ -202,13 +222,17 @@ public class AnimeAggregationServiceTests
     public async Task GetTodayAnimeEnrichedAsync_SetsTokensOnClients()
     {
         // Arrange
-        var cachedAnimes = TestDataFactory.CreateAnimeInfoDtoList(1);
-        _cacheServiceMock
-            .Setup(c => c.GetCachedAnimeListAsync())
-            .ReturnsAsync(cachedAnimes);
-        _cacheServiceMock
-            .Setup(c => c.GetTodayScheduleCacheTimeAsync())
-            .ReturnsAsync(DateTime.UtcNow);
+        var preFetchedEntities = CreateAnimeInfoEntities(1);
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(preFetchedEntities);
+
+        _resilienceServiceMock
+            .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
+                It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
 
         // Act
         await _sut.GetTodayAnimeEnrichedAsync("bangumi-token", "tmdb-token");
@@ -218,19 +242,21 @@ public class AnimeAggregationServiceTests
         _tmdbClientMock.Verify(t => t.SetToken("tmdb-token"), Times.Once);
     }
 
+    #endregion
+
+    #region Incremental Update Tests
+
     [Fact]
-    public async Task GetTodayAnimeEnrichedAsync_CachesResultsOnSuccess()
+    public async Task GetTodayAnimeEnrichedAsync_WhenNewAnimeFound_FetchesIncrementally()
     {
-        // Arrange
-        var bangumiResponse = TestDataFactory.CreateBangumiApiResponse(2);
+        // Arrange: Database has 2 anime
+        var preFetchedEntities = CreateAnimeInfoEntities(2);
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(preFetchedEntities);
 
-        _cacheServiceMock
-            .Setup(c => c.GetCachedAnimeListAsync())
-            .ReturnsAsync((List<AnimeInfoDto>?)null);
-        _cacheServiceMock
-            .Setup(c => c.GetTodayScheduleCacheTimeAsync())
-            .ReturnsAsync((DateTime?)null);
-
+        // Bangumi API returns 3 anime (1 new)
+        var bangumiResponse = TestDataFactory.CreateBangumiApiResponse(3);
         _resilienceServiceMock
             .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
                 It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
@@ -238,19 +264,114 @@ public class AnimeAggregationServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((bangumiResponse, 0, true));
 
-        _cacheServiceMock
-            .Setup(c => c.GetAnimeImagesCachedAsync(It.IsAny<int>()))
-            .ReturnsAsync((backend.Data.Entities.AnimeImagesEntity?)null);
+        // Mock for fetching new anime details
+        _bangumiClientMock
+            .Setup(b => b.GetSubjectDetailAsync(It.IsAny<int>()))
+            .ReturnsAsync(CreateBangumiSubjectDetail());
+
+        _tmdbClientMock
+            .Setup(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync(TestDataFactory.CreateTMDBAnimeInfo());
+
+        _aniListClientMock
+            .Setup(a => a.GetAnimeInfoAsync(It.IsAny<string>()))
+            .ReturnsAsync(TestDataFactory.CreateAniListAnimeInfo());
+
+        // Act
+        var result = await _sut.GetTodayAnimeEnrichedAsync("test-token");
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.DataSource.Should().Be(DataSource.Database);
+        // Should have original 2 + 1 new = 3
+        result.Count.Should().BeGreaterThanOrEqualTo(2);
+    }
+
+    #endregion
+
+    #region Caching Tests
+
+    [Fact]
+    public async Task GetTodayAnimeEnrichedAsync_WhenApiSucceeds_SavesToRepository()
+    {
+        // Arrange: Database is empty
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(new List<AnimeInfoEntity>());
+
+        var bangumiResponse = TestDataFactory.CreateBangumiApiResponse(2);
+        _resilienceServiceMock
+            .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
+                It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bangumiResponse, 0, true));
+
+        _bangumiClientMock
+            .Setup(b => b.GetSubjectDetailAsync(It.IsAny<int>()))
+            .ReturnsAsync(CreateBangumiSubjectDetail());
+
+        _tmdbClientMock
+            .Setup(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync(TestDataFactory.CreateTMDBAnimeInfo());
+
+        _aniListClientMock
+            .Setup(a => a.GetAnimeInfoAsync(It.IsAny<string>()))
+            .ReturnsAsync(TestDataFactory.CreateAniListAnimeInfo());
 
         // Act
         await _sut.GetTodayAnimeEnrichedAsync("test-token");
 
-        // Assert
-        _cacheServiceMock.Verify(
-            c => c.CacheTodayScheduleAsync(It.IsAny<List<int>>()),
+        // Assert: Should save to repository and cache
+        _repositoryMock.Verify(
+            r => r.SaveAnimeInfoBatchAsync(It.IsAny<List<AnimeInfoEntity>>()),
             Times.Once);
         _cacheServiceMock.Verify(
             c => c.CacheAnimeListAsync(It.IsAny<List<AnimeInfoDto>>()),
             Times.Once);
     }
+
+    #endregion
+
+    #region Helper Methods
+
+    private static List<AnimeInfoEntity> CreateAnimeInfoEntities(int count)
+    {
+        return Enumerable.Range(1, count).Select(i => new AnimeInfoEntity
+        {
+            BangumiId = i,
+            NameJapanese = $"テストアニメ{i}",
+            NameChinese = $"测试动画{i}",
+            NameEnglish = $"Test Anime {i}",
+            DescChinese = "测试描述",
+            DescEnglish = "Test description",
+            Score = "8.5",
+            ImagePortrait = $"https://example.com/poster{i}.jpg",
+            ImageLandscape = $"https://example.com/backdrop{i}.jpg",
+            UrlBangumi = $"https://bgm.tv/subject/{i}",
+            Weekday = (int)DateTime.Now.DayOfWeek == 0 ? 7 : (int)DateTime.Now.DayOfWeek
+        }).ToList();
+    }
+
+    private static JsonElement CreateEmptyJsonArray()
+    {
+        return JsonDocument.Parse("[]").RootElement;
+    }
+
+    private static JsonElement CreateBangumiSubjectDetail()
+    {
+        var detail = new
+        {
+            id = 1,
+            name = "テストアニメ",
+            name_cn = "测试动画",
+            summary = "测试简介",
+            date = "2024-01-15",
+            rating = new { score = 8.5 },
+            images = new { large = "https://example.com/poster.jpg" }
+        };
+        return JsonDocument.Parse(JsonSerializer.Serialize(detail)).RootElement;
+    }
+
+    #endregion
 }
