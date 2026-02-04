@@ -134,4 +134,38 @@ public static class TestDataFactory
             OriSiteUrl = "https://anilist.co/anime/12345"
         };
     }
+
+    /// <summary>
+    /// Create TMDB search response with mixed anime/live-action results
+    /// </summary>
+    public static string CreateTMDBMixedSearchResponse()
+    {
+        return JsonSerializer.Serialize(new
+        {
+            results = new object[]
+            {
+                new { id = 1, name = "Live Action Show", genre_ids = new[] { 18 }, origin_country = new[] { "US" } },
+                new { id = 2, name = "Anime Show", genre_ids = new[] { 16 }, origin_country = new[] { "JP" } },
+                new { id = 3, name = "Another Show", genre_ids = new[] { 35 }, origin_country = new[] { "KR" } }
+            }
+        });
+    }
+
+    /// <summary>
+    /// Create TMDB TV details with multiple seasons
+    /// </summary>
+    public static string CreateTMDBTvDetailsWithSeasons()
+    {
+        return JsonSerializer.Serialize(new
+        {
+            id = 12345,
+            name = "Multi-Season Anime",
+            seasons = new object[]
+            {
+                new { season_number = 1, air_date = "2020-01-10", poster_path = "/s1.jpg" },
+                new { season_number = 2, air_date = "2022-04-01", poster_path = "/s2.jpg" },
+                new { season_number = 3, air_date = "2024-01-06", poster_path = "/s3.jpg" }
+            }
+        });
+    }
 }
