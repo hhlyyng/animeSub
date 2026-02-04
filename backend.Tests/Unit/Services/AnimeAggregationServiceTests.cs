@@ -7,6 +7,7 @@ using backend.Models.Dtos;
 using backend.Services;
 using backend.Services.Implementations;
 using backend.Services.Interfaces;
+using backend.Services.Repositories;
 using backend.Tests.Fixtures;
 
 namespace backend.Tests.Unit.Services;
@@ -19,6 +20,8 @@ public class AnimeAggregationServiceTests
     private readonly Mock<IBangumiClient> _bangumiClientMock;
     private readonly Mock<ITMDBClient> _tmdbClientMock;
     private readonly Mock<IAniListClient> _aniListClientMock;
+    private readonly Mock<IJikanClient> _jikanClientMock;
+    private readonly Mock<IAnimeRepository> _repositoryMock;
     private readonly Mock<IAnimeCacheService> _cacheServiceMock;
     private readonly Mock<IResilienceService> _resilienceServiceMock;
     private readonly Mock<ILogger<AnimeAggregationService>> _loggerMock;
@@ -29,14 +32,22 @@ public class AnimeAggregationServiceTests
         _bangumiClientMock = new Mock<IBangumiClient>();
         _tmdbClientMock = new Mock<ITMDBClient>();
         _aniListClientMock = new Mock<IAniListClient>();
+        _jikanClientMock = new Mock<IJikanClient>();
+        _repositoryMock = new Mock<IAnimeRepository>();
         _cacheServiceMock = new Mock<IAnimeCacheService>();
         _resilienceServiceMock = new Mock<IResilienceService>();
         _loggerMock = new Mock<ILogger<AnimeAggregationService>>();
+
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(new List<backend.Data.Entities.AnimeInfoEntity>());
 
         _sut = new AnimeAggregationService(
             _bangumiClientMock.Object,
             _tmdbClientMock.Object,
             _aniListClientMock.Object,
+            _jikanClientMock.Object,
+            _repositoryMock.Object,
             _cacheServiceMock.Object,
             _resilienceServiceMock.Object,
             _loggerMock.Object);
@@ -98,7 +109,7 @@ public class AnimeAggregationServiceTests
             .ReturnsAsync((bangumiResponse, 0, true));
 
         _tmdbClientMock
-            .Setup(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>()))
+            .Setup(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync(tmdbInfo);
 
         _aniListClientMock

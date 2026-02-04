@@ -1,6 +1,7 @@
 using System.Text.Json;
 using backend.Models;
 using backend.Models.Dtos;
+using backend.Models.Jikan;
 
 namespace backend.Tests.Fixtures;
 
@@ -167,5 +168,127 @@ public static class TestDataFactory
                 new { season_number = 3, air_date = "2024-01-06", poster_path = "/s3.jpg" }
             }
         });
+    }
+
+    /// <summary>
+    /// Create a sample Jikan API top anime response
+    /// </summary>
+    public static string CreateJikanTopAnimeResponse(int count = 10)
+    {
+        var animes = Enumerable.Range(1, count).Select(i => new
+        {
+            mal_id = i,
+            url = $"https://myanimelist.net/anime/{i}",
+            title = $"Test Anime {i}",
+            title_japanese = $"テストアニメ {i}",
+            title_english = $"Test Anime EN {i}",
+            synopsis = $"This is a test synopsis for anime {i}",
+            score = 9.1 - (i * 0.05),
+            scored_by = 100000 - (i * 1000),
+            rank = i,
+            popularity = i * 10,
+            status = "Finished Airing",
+            images = new
+            {
+                jpg = new
+                {
+                    image_url = $"https://cdn.myanimelist.net/images/anime/{i}.jpg",
+                    small_image_url = $"https://cdn.myanimelist.net/images/anime/{i}_small.jpg",
+                    large_image_url = $"https://cdn.myanimelist.net/images/anime/{i}_large.jpg"
+                }
+            }
+        }).ToArray();
+
+        return JsonSerializer.Serialize(new
+        {
+            data = animes,
+            pagination = new { last_visible_page = 1, has_next_page = false }
+        });
+    }
+
+    /// <summary>
+    /// Create a sample JikanAnimeInfo for testing
+    /// </summary>
+    public static JikanAnimeInfo CreateJikanAnimeInfo(int malId = 1, string title = "Test Anime")
+    {
+        return new JikanAnimeInfo
+        {
+            MalId = malId,
+            Title = title,
+            TitleJapanese = $"テスト{title}",
+            TitleEnglish = $"{title} EN",
+            Synopsis = $"Synopsis for {title}",
+            Score = 8.5,
+            ScoredBy = 50000,
+            Rank = malId,
+            Popularity = malId * 10,
+            Status = "Finished Airing",
+            Url = $"https://myanimelist.net/anime/{malId}",
+            Images = new JikanImages
+            {
+                Jpg = new JikanImageFormat
+                {
+                    ImageUrl = $"https://cdn.myanimelist.net/images/anime/{malId}.jpg",
+                    LargeImageUrl = $"https://cdn.myanimelist.net/images/anime/{malId}_large.jpg"
+                }
+            }
+        };
+    }
+
+    /// <summary>
+    /// Create a sample AniList GraphQL trending response
+    /// </summary>
+    public static string CreateAniListTrendingResponse(int count = 10)
+    {
+        var media = Enumerable.Range(1, count).Select(i => new
+        {
+            id = i,
+            title = new
+            {
+                romaji = $"Test Anime {i}",
+                native = $"テストアニメ {i}",
+                english = $"Test Anime EN {i}"
+            },
+            description = $"Description for anime {i}",
+            averageScore = 85 - i,
+            coverImage = new
+            {
+                large = $"https://anilist.co/img/cover_{i}.jpg",
+                extraLarge = $"https://anilist.co/img/cover_{i}_xl.jpg"
+            },
+            bannerImage = $"https://anilist.co/img/banner_{i}.jpg",
+            siteUrl = $"https://anilist.co/anime/{i}"
+        }).ToArray();
+
+        return JsonSerializer.Serialize(new
+        {
+            data = new
+            {
+                Page = new { media = media }
+            }
+        });
+    }
+
+    /// <summary>
+    /// Create a sample Bangumi top subjects search response
+    /// </summary>
+    public static string CreateBangumiTopSubjectsResponse(int count = 10)
+    {
+        var subjects = Enumerable.Range(1, count).Select(i => new
+        {
+            id = i,
+            name = $"テストアニメ {i}",
+            name_cn = $"测试动漫 {i}",
+            summary = $"这是测试动漫 {i} 的简介",
+            score = 9.5 - (i * 0.1),
+            rank = i,
+            images = new
+            {
+                large = $"https://bgm.tv/img/cover_{i}.jpg",
+                medium = $"https://bgm.tv/img/cover_{i}_m.jpg"
+            }
+        }).ToArray();
+
+        return JsonSerializer.Serialize(new { data = subjects });
     }
 }
