@@ -19,9 +19,13 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
   const secondaryTitle = anime.jp_title;
 
+  // Check for non-empty descriptions (handle empty strings)
+  const hasChDesc = anime.ch_desc && anime.ch_desc.trim().length > 0;
+  const hasEnDesc = anime.en_desc && anime.en_desc.trim().length > 0;
+
   const description = language === 'zh'
-    ? (anime.ch_desc || anime.en_desc || '暂无描述')
-    : (anime.en_desc || anime.ch_desc || 'No description available');
+    ? (hasChDesc ? anime.ch_desc : (hasEnDesc ? anime.en_desc : '暂无描述'))
+    : (hasEnDesc ? anime.en_desc : (hasChDesc ? anime.ch_desc : 'No description available'));
 
   const descriptionLabel = language === 'zh' ? '简介' : 'Synopsis';
   const linksLabel = language === 'zh' ? '相关链接' : 'Links';

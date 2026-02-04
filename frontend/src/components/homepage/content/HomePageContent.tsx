@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import AnimeFlow from "./AnimeInfoFlow";
+import { useAppStore } from "../../../stores/useAppStores";
 
 type AnimeInfo = {
   bangumi_id: string;
@@ -26,6 +27,15 @@ const HomeContent = () => {
     const [animes, setAnimes] = useState<AnimeInfo[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const language = useAppStore((state) => state.language);
+
+    // 根据语言设置文本
+    const texts = {
+        loading: language === 'zh' ? '正在加载今日动漫...' : "Loading today's anime...",
+        error: language === 'zh' ? '错误' : 'Error',
+        noAnime: language === 'zh' ? '今日暂无动漫' : 'No anime found for today',
+        topic: language === 'zh' ? '今日放送' : "Today's Anime"
+    };
 
     useEffect(() => {
         // 尝试从 sessionStorage 读取缓存
@@ -82,7 +92,7 @@ const HomeContent = () => {
     if (loading) {
         return (
             <div className="w-full px-12 flex justify-center items-center h-64">
-                <div className="text-lg">Loading today's anime...</div>
+                <div className="text-lg">{texts.loading}</div>
             </div>
         );
     }
@@ -90,7 +100,7 @@ const HomeContent = () => {
     if (error) {
         return (
             <div className="w-full px-12 flex justify-center items-center h-64">
-                <div className="text-red-500">Error: {error}</div>
+                <div className="text-red-500">{texts.error}: {error}</div>
             </div>
         );
     }
@@ -98,14 +108,14 @@ const HomeContent = () => {
     if (animes.length === 0) {
         return (
             <div className="w-full flex justify-center items-center h-64">
-                <div className="text-gray-500">No anime found for today</div>
+                <div className="text-gray-500">{texts.noAnime}</div>
             </div>
         );
     }
 
     return (
         <div className="w-fit overflow-hidden content-header">
-            <AnimeFlow topic="今日放送" items={animes} />
+            <AnimeFlow topic={texts.topic} items={animes} />
         </div>
     );
 };

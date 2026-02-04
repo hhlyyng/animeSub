@@ -3,13 +3,13 @@ import SideBar from "./SideBar";
 import DownloadPage from "./content/DownLoadPage";
 import HomeContent from "./content/HomePageContent";
 import Setting from "./content/SettingPage";
-import { useState } from 'react';
 import { useAppStore } from "../../stores/useAppStores";
 
 // Route Content
 const AppContent = () => {
-  const [language, setLanguage] = useState<"en" | "zh">("zh");
   const location = useLocation();
+  const language = useAppStore((state) => state.language);
+  const setLanguage = useAppStore((state) => state.setLanguage);
   const isModalOpen = useAppStore((state) => state.isModalOpen);
 
   // 从路径映射到页面类型

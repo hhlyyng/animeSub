@@ -38,6 +38,17 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "anime-app-storage", // localStorage 的 key 名称
+      partialize: (state) => ({
+        // Only persist these fields, exclude isModalOpen (UI state)
+        username: state.username,
+        language: state.language,
+      }),
+      // Ensure isModalOpen is always reset on page load
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          state.isModalOpen = false;
+        }
+      },
     }
   )
 );
