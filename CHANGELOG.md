@@ -6,6 +6,103 @@
 
 ## 2026-02-04
 
+### TMDB API 优化
+
+#### 改动概述
+
+优化 TMDB API 匹配逻辑，解决三个问题：中文简介备选、动画与真人剧区分、多季度匹配。
+
+#### Phase 1: 中文简介备选
+
+当 Bangumi 中文简介为空时，使用 TMDB 中文翻译作为备选。
+
+**修改文件**: `backend/Services/Implementations/AnimeAggregationService.cs`
+
+```csharp
+// 之前
+ChDesc = chDesc,
+
+// 之后
+ChDesc = !string.IsNullOrEmpty(chDesc)
+    ? chDesc
+    : (tmdbResult?.ChineseSummary ?? ""),
+```
+
+#### Phase 2: 动画优先匹配
+
+TMDB 搜索结果优先选择 Animation 类型 (genre_id=16)，进一步优先选择日本来源 (origin_country=JP)。
+
+**修改文件**: `backend/Services/Implementations/TMDBClient.cs`
+
+**匹配优先级**:
+1. Animation (16) + Japanese (JP) - 完美匹配
+2. Animation (16) - 次优匹配
+3. 第一个结果 - 回退
+
+```csharp
+// 遍历结果找到最佳匹配
+foreach (var item in results.EnumerateArray())
+{
+    // 检查 genre_ids 是否包含 16 (Animation)
+    // 检查 origin_country 是否包含 JP
+    if (isAnimation && isJapanese) { bestMatch = item; break; }
+    if (isAnimation && bestMatch == null) { bestMatch = item; }
+}
+var first = bestMatch ?? results[0];
+```
+
+#### Phase 3: 多季度匹配
+
+使用 Bangumi 播出日期的年份过滤 TMDB 搜索，获取对应季度的专属图片。
+
+**修改文件**:
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/Services/Interfaces/ITMDBClient.cs` | 扩展方法签名添加 `airDate` 参数 |
+| `backend/Services/Implementations/TMDBClient.cs` | 年份过滤 + 季度图片获取 |
+| `backend/Services/Implementations/AnimeAggregationService.cs` | 从 Bangumi 获取并传递 `airDate` |
+
+```csharp
+// 接口扩展
+Task<TMDBAnimeInfo?> GetAnimeSummaryAndBackdropAsync(string title, string? airDate = null);
+
+// 搜索 URL 添加年份过滤
+if (year.HasValue)
+    url += $"&first_air_date_year={year}";
+
+// 获取 TV 详情匹配季度
+if (seasonAirDate.StartsWith(year.ToString()))
+{
+    // 找到匹配季度，获取季度图片
+}
+```
+
+#### Phase 4: 单元测试
+
+新增 `backend.Tests/Unit/Services/TMDBClientTests.cs`，包含 7 个测试用例：
+
+| 测试 | 描述 |
+|------|------|
+| `WithMixedResults_SelectsAnime` | 混合结果中选择动画 |
+| `WithMultipleAnime_SelectsJapanese` | 多个动画中优先日本 |
+| `NoAnimeFound_FallsBackToFirst` | 无动画时回退第一个 |
+| `WithAirDate_IncludesYearInSearch` | 有日期时包含年份过滤 |
+| `WithoutAirDate_NoYearFilter` | 无日期时不过滤 |
+| `NoResults_ReturnsDefaultInfo` | 无结果返回默认值 |
+| `NoToken_ReturnsNull` | 无 Token 返回 null |
+
+同时扩展 `TestDataFactory.cs` 添加 TMDB 测试数据工厂方法。
+
+#### Git 提交记录
+
+```
+081a694 feat(backend): optimize TMDB API matching for anime
+0b32309 feat(backend): add multi-season matching with air date filtering
+a4131d7 test(backend): add unit tests for TMDB client improvements
+```
+
+---
+
 ### Mikan RSS 订阅系统实现
 
 #### 改动概述
