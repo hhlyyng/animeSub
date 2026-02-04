@@ -125,19 +125,87 @@ public class AnimeRepository : IAnimeRepository
         }
         else
         {
-            // Update fields
+            // Update all fields
             existing.NameChinese = anime.NameChinese ?? existing.NameChinese;
             existing.NameJapanese = anime.NameJapanese ?? existing.NameJapanese;
             existing.NameEnglish = anime.NameEnglish ?? existing.NameEnglish;
-            existing.Rating = anime.Rating ?? existing.Rating;
-            existing.Summary = anime.Summary ?? existing.Summary;
+            existing.DescChinese = anime.DescChinese ?? existing.DescChinese;
+            existing.DescEnglish = anime.DescEnglish ?? existing.DescEnglish;
+            existing.Score = anime.Score ?? existing.Score;
+            existing.ImagePortrait = anime.ImagePortrait ?? existing.ImagePortrait;
+            existing.ImageLandscape = anime.ImageLandscape ?? existing.ImageLandscape;
+            existing.TmdbId = anime.TmdbId ?? existing.TmdbId;
+            existing.AnilistId = anime.AnilistId ?? existing.AnilistId;
+            existing.UrlBangumi = anime.UrlBangumi ?? existing.UrlBangumi;
+            existing.UrlTmdb = anime.UrlTmdb ?? existing.UrlTmdb;
+            existing.UrlAnilist = anime.UrlAnilist ?? existing.UrlAnilist;
             existing.AirDate = anime.AirDate ?? existing.AirDate;
-            existing.Weekday = anime.Weekday;
+            existing.Weekday = anime.Weekday != 0 ? anime.Weekday : existing.Weekday;
+            existing.IsPreFetched = anime.IsPreFetched || existing.IsPreFetched;
             existing.UpdatedAt = DateTime.UtcNow;
             _logger.LogDebug("Updated anime info for BangumiId {BangumiId}", anime.BangumiId);
         }
 
         await _context.SaveChangesAsync();
+    }
+
+    public async Task SaveAnimeInfoBatchAsync(List<AnimeInfoEntity> animes)
+    {
+        foreach (var anime in animes)
+        {
+            var existing = await _context.AnimeInfos
+                .FirstOrDefaultAsync(a => a.BangumiId == anime.BangumiId);
+
+            if (existing == null)
+            {
+                anime.CreatedAt = DateTime.UtcNow;
+                anime.UpdatedAt = DateTime.UtcNow;
+                _context.AnimeInfos.Add(anime);
+            }
+            else
+            {
+                // Update all fields
+                existing.NameChinese = anime.NameChinese ?? existing.NameChinese;
+                existing.NameJapanese = anime.NameJapanese ?? existing.NameJapanese;
+                existing.NameEnglish = anime.NameEnglish ?? existing.NameEnglish;
+                existing.DescChinese = anime.DescChinese ?? existing.DescChinese;
+                existing.DescEnglish = anime.DescEnglish ?? existing.DescEnglish;
+                existing.Score = anime.Score ?? existing.Score;
+                existing.ImagePortrait = anime.ImagePortrait ?? existing.ImagePortrait;
+                existing.ImageLandscape = anime.ImageLandscape ?? existing.ImageLandscape;
+                existing.TmdbId = anime.TmdbId ?? existing.TmdbId;
+                existing.AnilistId = anime.AnilistId ?? existing.AnilistId;
+                existing.UrlBangumi = anime.UrlBangumi ?? existing.UrlBangumi;
+                existing.UrlTmdb = anime.UrlTmdb ?? existing.UrlTmdb;
+                existing.UrlAnilist = anime.UrlAnilist ?? existing.UrlAnilist;
+                existing.AirDate = anime.AirDate ?? existing.AirDate;
+                existing.Weekday = anime.Weekday != 0 ? anime.Weekday : existing.Weekday;
+                existing.IsPreFetched = anime.IsPreFetched || existing.IsPreFetched;
+                existing.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+
+        await _context.SaveChangesAsync();
+        _logger.LogInformation("Batch saved {Count} anime info records", animes.Count);
+    }
+
+    public async Task<List<AnimeInfoEntity>> GetAnimesByWeekdayAsync(int weekday)
+    {
+        var animes = await _context.AnimeInfos
+            .Where(a => a.Weekday == weekday && a.IsPreFetched)
+            .ToListAsync();
+
+        _logger.LogInformation("Found {Count} pre-fetched anime for weekday {Weekday}", animes.Count, weekday);
+        return animes;
+    }
+
+    public async Task<List<AnimeInfoEntity>> GetPreFetchedAnimesAsync(List<int> bangumiIds)
+    {
+        var animes = await _context.AnimeInfos
+            .Where(a => bangumiIds.Contains(a.BangumiId) && a.IsPreFetched)
+            .ToListAsync();
+
+        return animes;
     }
 
     #endregion
@@ -193,6 +261,31 @@ public class AnimeRepository : IAnimeRepository
         }
 
         await _context.SaveChangesAsync();
+    }
+
+    #endregion
+
+    #region Maintenance
+
+    public async Task ClearAllAnimeDataAsync()
+    {
+        // Clear anime info table
+        var animeInfoCount = await _context.AnimeInfos.CountAsync();
+        _context.AnimeInfos.RemoveRange(_context.AnimeInfos);
+
+        // Clear anime images table
+        var animeImagesCount = await _context.AnimeImages.CountAsync();
+        _context.AnimeImages.RemoveRange(_context.AnimeImages);
+
+        // Clear daily schedule cache
+        var scheduleCacheCount = await _context.DailyScheduleCaches.CountAsync();
+        _context.DailyScheduleCaches.RemoveRange(_context.DailyScheduleCaches);
+
+        await _context.SaveChangesAsync();
+
+        _logger.LogWarning(
+            "Cleared all anime data: {AnimeInfo} anime info, {AnimeImages} anime images, {ScheduleCache} schedule caches",
+            animeInfoCount, animeImagesCount, scheduleCacheCount);
     }
 
     #endregion

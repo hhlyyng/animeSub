@@ -6,6 +6,82 @@
 
 ## 2026-02-04
 
+### 预取架构重构
+
+#### 改动概述
+
+将后端从实时 API 聚合架构改为预取 + 增量更新架构，将响应时间从 3-10 秒优化到 <100ms。
+
+#### 架构对比
+
+| 对比项 | 之前 (实时聚合) | 之后 (预取架构) |
+|--------|----------------|----------------|
+| 响应时间 | 3-10 秒 | <100ms |
+| API 调用 | 每次请求调用多个 API | 仅在凌晨批量调用 |
+| 数据来源 | Bangumi → TMDB → AniList | SQLite DB (预取) + 实时补充 |
+| 可靠性 | 依赖外部 API 可用性 | 数据库优先，API 故障不影响 |
+
+#### 数据流程
+
+```
+前端: GET /api/anime/today (无需改动)
+         ↓
+后端 AnimeAggregationService:
+    ├── 有预取数据? → 返回 DB 数据 + 检查新番增量
+    └── 无预取数据? → 实时 API 聚合
+         ↓
+返回统一的 AnimeListResponse
+```
+
+#### 新增文件
+
+| 文件 | 说明 |
+|------|------|
+| `backend/Services/Background/AnimePreFetchService.cs` | 定时预取后台服务 |
+| `backend/Models/PreFetchStatus.cs` | 预取服务状态模型 |
+| `backend/Controllers/AdminController.cs` | 管理 API 控制器 |
+
+#### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/Data/Entities/AnimeInfoEntity.cs` | 扩展字段存储完整聚合数据 |
+| `backend/Services/Implementations/AnimeAggregationService.cs` | 重构为 DB 优先读取 |
+| `backend/Services/Repositories/IAnimeRepository.cs` | 新增批量查询和清理方法 |
+| `backend/Services/Repositories/AnimeRepository.cs` | 实现新方法 |
+| `backend/Services/Interfaces/IBangumiClient.cs` | 新增 `GetFullCalendarAsync()` |
+| `backend/Services/Implementations/BangumiClient.cs` | 实现完整周历获取 |
+| `backend/Models/AnimeResponse.cs` | 新增 `DataSource.Database` 枚举值 |
+| `backend/Models/Configuration/ApiConfiguration.cs` | 新增 `PreFetchConfig` |
+| `backend/appsettings.json` | 添加 PreFetch 配置节 |
+| `backend/Program.cs` | 注册预取后台服务 |
+
+#### 管理 API 端点
+
+| Method | Endpoint | 说明 |
+|--------|----------|------|
+| GET | `/api/admin/prefetch/status` | 获取预取服务状态 |
+| POST | `/api/admin/prefetch` | 手动触发预取 |
+| GET | `/api/admin/prefetch/stats` | 获取数据库统计 |
+| DELETE | `/api/admin/prefetch/data` | 清空预取数据 |
+
+#### 配置项 (appsettings.json)
+
+```json
+{
+  "PreFetch": {
+    "Enabled": true,
+    "ScheduleHour": 3,
+    "RunOnStartup": true,
+    "MaxConcurrency": 3,
+    "BangumiToken": "",
+    "TmdbToken": ""
+  }
+}
+```
+
+---
+
 ### TMDB API 优化
 
 #### 改动概述

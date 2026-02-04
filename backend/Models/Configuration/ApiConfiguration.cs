@@ -64,3 +64,41 @@ public class AniListConfig
     /// </summary>
     public int TimeoutSeconds { get; set; } = 30;
 }
+
+/// <summary>
+/// Pre-fetch service configuration
+/// </summary>
+public class PreFetchConfig
+{
+    public const string SectionName = "PreFetch";
+
+    /// <summary>
+    /// Enable/disable the pre-fetch background service
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Hour of day to run pre-fetch (0-23, default: 3 = 3:00 AM)
+    /// </summary>
+    public int ScheduleHour { get; set; } = 3;
+
+    /// <summary>
+    /// Run pre-fetch immediately on application startup
+    /// </summary>
+    public bool RunOnStartup { get; set; } = false;
+
+    /// <summary>
+    /// Maximum concurrent API requests during pre-fetch
+    /// </summary>
+    public int MaxConcurrency { get; set; } = 3;
+
+    /// <summary>
+    /// Bangumi API token for pre-fetch service
+    /// </summary>
+    public string BangumiToken { get; set; } = "";
+
+    /// <summary>
+    /// TMDB API token for pre-fetch service
+    /// </summary>
+    public string TmdbToken { get; set; } = "";
+}

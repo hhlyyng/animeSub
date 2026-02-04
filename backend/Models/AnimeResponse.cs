@@ -13,9 +13,14 @@ public enum DataSource
     Api,
 
     /// <summary>
-    /// Cached data from SQLite database
+    /// Cached data from memory cache
     /// </summary>
     Cache,
+
+    /// <summary>
+    /// Pre-fetched data from SQLite database
+    /// </summary>
+    Database,
 
     /// <summary>
     /// Fallback data from cache due to API failure

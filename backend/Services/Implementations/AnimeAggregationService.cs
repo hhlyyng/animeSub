@@ -1,19 +1,22 @@
 using System.Text.Json;
+using backend.Data.Entities;
 using backend.Models;
 using backend.Models.Dtos;
 using backend.Services.Interfaces;
+using backend.Services.Repositories;
 
 namespace backend.Services.Implementations;
 
 /// <summary>
-/// Service that aggregates anime data from multiple external APIs
-/// with Polly retry, two-tier caching, and data source tracking
+/// Service that aggregates anime data from multiple sources
+/// Priority: Pre-fetched DB data > Real-time API fetch
 /// </summary>
 public class AnimeAggregationService : IAnimeAggregationService
 {
     private readonly IBangumiClient _bangumiClient;
     private readonly ITMDBClient _tmdbClient;
     private readonly IAniListClient _aniListClient;
+    private readonly IAnimeRepository _repository;
     private readonly IAnimeCacheService _cacheService;
     private readonly IResilienceService _resilienceService;
     private readonly ILogger<AnimeAggregationService> _logger;
@@ -22,6 +25,7 @@ public class AnimeAggregationService : IAnimeAggregationService
         IBangumiClient bangumiClient,
         ITMDBClient tmdbClient,
         IAniListClient aniListClient,
+        IAnimeRepository repository,
         IAnimeCacheService cacheService,
         IResilienceService resilienceService,
         ILogger<AnimeAggregationService> logger)
@@ -29,6 +33,7 @@ public class AnimeAggregationService : IAnimeAggregationService
         _bangumiClient = bangumiClient ?? throw new ArgumentNullException(nameof(bangumiClient));
         _tmdbClient = tmdbClient ?? throw new ArgumentNullException(nameof(tmdbClient));
         _aniListClient = aniListClient ?? throw new ArgumentNullException(nameof(aniListClient));
+        _repository = repository ?? throw new ArgumentNullException(nameof(repository));
         _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
         _resilienceService = resilienceService ?? throw new ArgumentNullException(nameof(resilienceService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -47,129 +52,71 @@ public class AnimeAggregationService : IAnimeAggregationService
         _tmdbClient.SetToken(tmdbToken);
 
         _logger.LogInformation("Starting anime aggregation for today's schedule");
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-        // Step 1: Check if we have fresh cached data (same day)
-        var cachedList = await _cacheService.GetCachedAnimeListAsync();
-        var cacheTime = await _cacheService.GetTodayScheduleCacheTimeAsync();
-
-        if (cachedList != null && cachedList.Count > 0 && cacheTime.HasValue)
-        {
-            // Data is from today and already cached
-            _logger.LogInformation("Returning cached anime list ({Count} items, cached at {CacheTime})",
-                cachedList.Count, cacheTime.Value);
-
-            return new AnimeListResponse
-            {
-                Success = true,
-                DataSource = DataSource.Cache,
-                IsStale = false,
-                Message = "Data from cache (up to date)",
-                LastUpdated = cacheTime.Value,
-                Count = cachedList.Count,
-                Animes = cachedList,
-                RetryAttempts = 0
-            };
-        }
-
-        // Step 2: Try to fetch from Bangumi API with retry
-        var (bangumiData, retryCount, apiSuccess) = await _resilienceService.ExecuteWithRetryAndMetadataAsync(
-            async ct => await _bangumiClient.GetDailyBroadcastAsync(),
-            "Bangumi.GetDailyBroadcast",
-            cancellationToken);
-
-        // Step 3: If API failed, return cached fallback
-        if (!apiSuccess || bangumiData.ValueKind == JsonValueKind.Undefined)
-        {
-            _logger.LogWarning("Bangumi API failed after {RetryCount} retries, using cached fallback", retryCount);
-
-            if (cachedList != null && cachedList.Count > 0)
-            {
-                return new AnimeListResponse
-                {
-                    Success = true,
-                    DataSource = DataSource.CacheFallback,
-                    IsStale = true,
-                    Message = $"API request failed after {retryCount} retries. Showing cached data.",
-                    LastUpdated = cacheTime,
-                    Count = cachedList.Count,
-                    Animes = cachedList,
-                    RetryAttempts = retryCount
-                };
-            }
-
-            // No cache available at all
-            return new AnimeListResponse
-            {
-                Success = false,
-                DataSource = DataSource.Api,
-                IsStale = true,
-                Message = $"API request failed after {retryCount} retries and no cached data available.",
-                LastUpdated = null,
-                Count = 0,
-                Animes = new List<AnimeInfoDto>(),
-                RetryAttempts = retryCount
-            };
-        }
-
-        // Step 4: Process API data and build enriched list
-        var enrichedAnimes = new List<AnimeInfoDto>();
+        // Get today's weekday (1-7, Monday-Sunday)
+        int todayWeekday = (int)DateTime.Now.DayOfWeek;
+        if (todayWeekday == 0) todayWeekday = 7; // Sunday = 7
 
         try
         {
-            foreach (var anime in bangumiData.EnumerateArray())
-            {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
+            // Step 1: Try to get pre-fetched data from database
+            var preFetchedAnimes = await _repository.GetAnimesByWeekdayAsync(todayWeekday);
 
-                try
+            if (preFetchedAnimes.Count > 0)
+            {
+                _logger.LogInformation("Found {Count} pre-fetched anime for weekday {Weekday}",
+                    preFetchedAnimes.Count, todayWeekday);
+
+                // Step 2: Fetch current Bangumi schedule to check for new anime
+                var (currentBangumiIds, apiSuccess) = await GetCurrentBangumiIdsAsync(cancellationToken);
+
+                if (apiSuccess && currentBangumiIds.Count > 0)
                 {
-                    var enrichedAnime = await ProcessSingleAnimeAsync(anime, tmdbToken, cancellationToken);
-                    if (enrichedAnime != null)
+                    // Find new anime not in pre-fetched data
+                    var preFetchedIds = preFetchedAnimes.Select(a => a.BangumiId).ToHashSet();
+                    var newAnimeIds = currentBangumiIds.Where(id => !preFetchedIds.Contains(id)).ToList();
+
+                    if (newAnimeIds.Count > 0)
                     {
-                        enrichedAnimes.Add(enrichedAnime);
+                        _logger.LogInformation("Found {Count} new anime not in pre-fetch, fetching in real-time", newAnimeIds.Count);
+
+                        // Fetch new anime in real-time
+                        var newAnimes = await FetchNewAnimesAsync(newAnimeIds, todayWeekday, cancellationToken);
+                        preFetchedAnimes.AddRange(newAnimes);
                     }
                 }
-                catch (Exception ex)
+
+                // Convert to DTOs
+                var animeDtos = preFetchedAnimes.Select(ConvertEntityToDto).ToList();
+
+                stopwatch.Stop();
+                _logger.LogInformation("Returned {Count} anime from pre-fetch + real-time in {Elapsed}ms",
+                    animeDtos.Count, stopwatch.ElapsedMilliseconds);
+
+                return new AnimeListResponse
                 {
-                    _logger.LogError(ex, "Error processing individual anime");
-                    // Continue with next anime
-                }
+                    Success = true,
+                    DataSource = DataSource.Database,
+                    IsStale = false,
+                    Message = $"Data from pre-fetch database ({preFetchedAnimes.Count} cached)",
+                    LastUpdated = DateTime.UtcNow,
+                    Count = animeDtos.Count,
+                    Animes = animeDtos,
+                    RetryAttempts = 0
+                };
             }
 
-            // Step 5: Cache the results
-            if (enrichedAnimes.Count > 0)
-            {
-                // Extract bangumi IDs for caching (now strongly typed)
-                var bangumiIds = enrichedAnimes
-                    .Where(a => int.TryParse(a.BangumiId, out _))
-                    .Select(a => int.Parse(a.BangumiId))
-                    .ToList();
-
-                await _cacheService.CacheTodayScheduleAsync(bangumiIds);
-                await _cacheService.CacheAnimeListAsync(enrichedAnimes);
-            }
-
-            _logger.LogInformation("Anime aggregation completed successfully with {Count} anime", enrichedAnimes.Count);
-
-            return new AnimeListResponse
-            {
-                Success = true,
-                DataSource = DataSource.Api,
-                IsStale = false,
-                Message = retryCount > 0
-                    ? $"Data refreshed from API (succeeded after {retryCount} retries)"
-                    : "Data refreshed from API",
-                LastUpdated = DateTime.UtcNow,
-                Count = enrichedAnimes.Count,
-                Animes = enrichedAnimes,
-                RetryAttempts = retryCount
-            };
+            // Step 3: No pre-fetched data, fall back to real-time API fetch
+            _logger.LogWarning("No pre-fetched data for weekday {Weekday}, falling back to real-time fetch", todayWeekday);
+            return await FetchAllFromApiAsync(bangumiToken, tmdbToken, todayWeekday, cancellationToken);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error during anime aggregation");
 
-            // Try to return cached fallback on error
+            // Try memory cache fallback
+            var cachedList = await _cacheService.GetCachedAnimeListAsync();
             if (cachedList != null && cachedList.Count > 0)
             {
                 return new AnimeListResponse
@@ -177,11 +124,11 @@ public class AnimeAggregationService : IAnimeAggregationService
                     Success = true,
                     DataSource = DataSource.CacheFallback,
                     IsStale = true,
-                    Message = $"Error processing API data: {ex.Message}. Showing cached data.",
-                    LastUpdated = cacheTime,
+                    Message = $"Error occurred, showing cached data: {ex.Message}",
+                    LastUpdated = null,
                     Count = cachedList.Count,
                     Animes = cachedList,
-                    RetryAttempts = retryCount
+                    RetryAttempts = 0
                 };
             }
 
@@ -189,226 +136,253 @@ public class AnimeAggregationService : IAnimeAggregationService
         }
     }
 
-    private async Task<AnimeInfoDto?> ProcessSingleAnimeAsync(
-        JsonElement anime,
-        string? tmdbToken,
+    private async Task<(List<int> ids, bool success)> GetCurrentBangumiIdsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var (bangumiData, _, apiSuccess) = await _resilienceService.ExecuteWithRetryAndMetadataAsync(
+                async ct => await _bangumiClient.GetDailyBroadcastAsync(),
+                "Bangumi.GetDailyBroadcast",
+                cancellationToken);
+
+            if (!apiSuccess || bangumiData.ValueKind == JsonValueKind.Undefined)
+                return (new List<int>(), false);
+
+            var ids = bangumiData.EnumerateArray()
+                .Select(a => a.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0)
+                .Where(id => id > 0)
+                .ToList();
+
+            return (ids, true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch current Bangumi IDs");
+            return (new List<int>(), false);
+        }
+    }
+
+    private async Task<List<AnimeInfoEntity>> FetchNewAnimesAsync(
+        List<int> bangumiIds,
+        int weekday,
         CancellationToken cancellationToken)
     {
-        var bangumiId = anime.GetProperty("id").GetInt32();
+        var results = new List<AnimeInfoEntity>();
 
-        var oriTitle = anime.TryGetProperty("name", out var nameProperty) && nameProperty.ValueKind != JsonValueKind.Null
-            ? nameProperty.GetString() ?? ""
-            : "";
-
-        bool containsJapaneseInOriTitle = !string.IsNullOrEmpty(oriTitle) &&
-            System.Text.RegularExpressions.Regex.IsMatch(oriTitle, @"[\p{IsHiragana}\p{IsKatakana}]");
-
-        bool containsPureChineseInOriTitle = !string.IsNullOrEmpty(oriTitle) &&
-            System.Text.RegularExpressions.Regex.IsMatch(oriTitle, @"^[\p{IsCJKUnifiedIdeographs}]+$") &&
-            !System.Text.RegularExpressions.Regex.IsMatch(oriTitle, @"[\p{IsHiragana}\p{IsKatakana}]");
-
-        var chTitle = anime.TryGetProperty("name_cn", out var nameCn) && nameCn.ValueKind != JsonValueKind.Null
-            ? nameCn.GetString() ?? ""
-            : "";
-
-        var chDesc = anime.TryGetProperty("summary", out var summary) && summary.ValueKind != JsonValueKind.Null
-            ? summary.GetString() ?? ""
-            : "";
-
-        var score = anime.TryGetProperty("rating", out var rating) && rating.ValueKind != JsonValueKind.Null &&
-                rating.TryGetProperty("score", out var scoreEl) && scoreEl.ValueKind != JsonValueKind.Null
-                ? scoreEl.GetDouble().ToString("F1")
-                : "0";
-
-        // Get air date for TMDB season matching (format: YYYY-MM-DD)
-        var airDate = anime.TryGetProperty("date", out var dateEl) && dateEl.ValueKind != JsonValueKind.Null
-            ? dateEl.GetString()
-            : null;
-
-        _logger.LogInformation("Processing anime: {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
-
-        // Fetch full subject detail if summary is empty (calendar API doesn't include summary)
-        if (string.IsNullOrEmpty(chDesc) || string.IsNullOrEmpty(chTitle) || string.IsNullOrEmpty(airDate))
+        foreach (var bangumiId in bangumiIds)
         {
+            if (cancellationToken.IsCancellationRequested)
+                break;
+
             try
             {
-                var subjectDetail = await _bangumiClient.GetSubjectDetailAsync(bangumiId);
-
-                if (string.IsNullOrEmpty(chDesc) &&
-                    subjectDetail.TryGetProperty("summary", out var detailSummary) &&
-                    detailSummary.ValueKind != JsonValueKind.Null)
+                var anime = await FetchSingleAnimeAsync(bangumiId, weekday, cancellationToken);
+                if (anime != null)
                 {
-                    chDesc = detailSummary.GetString() ?? "";
-                    _logger.LogInformation("Fetched Chinese description from subject detail for {Title}", oriTitle);
-                }
-
-                if (string.IsNullOrEmpty(chTitle) &&
-                    subjectDetail.TryGetProperty("name_cn", out var detailNameCn) &&
-                    detailNameCn.ValueKind != JsonValueKind.Null)
-                {
-                    chTitle = detailNameCn.GetString() ?? "";
-                    _logger.LogInformation("Fetched Chinese title from subject detail for {Title}", oriTitle);
-                }
-
-                if (string.IsNullOrEmpty(airDate) &&
-                    subjectDetail.TryGetProperty("date", out var detailDate) &&
-                    detailDate.ValueKind != JsonValueKind.Null)
-                {
-                    airDate = detailDate.GetString();
-                    _logger.LogInformation("Fetched air date from subject detail for {Title}: {AirDate}", oriTitle, airDate);
+                    results.Add(anime);
+                    // Save to database for future use
+                    await _repository.SaveAnimeInfoAsync(anime);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to fetch subject detail for {BangumiId}, continuing without Chinese description", bangumiId);
+                _logger.LogWarning(ex, "Failed to fetch new anime BangumiId {BangumiId}", bangumiId);
             }
         }
 
-        // Check cache for images first
-        var cachedImages = await _cacheService.GetAnimeImagesCachedAsync(bangumiId);
+        return results;
+    }
 
-        Models.TMDBAnimeInfo? tmdbResult = null;
-        string? backdropUrl = cachedImages?.BackdropUrl;
+    private async Task<AnimeInfoEntity?> FetchSingleAnimeAsync(
+        int bangumiId,
+        int weekday,
+        CancellationToken cancellationToken)
+    {
+        // Fetch subject detail from Bangumi
+        var subjectDetail = await _bangumiClient.GetSubjectDetailAsync(bangumiId);
 
-        // Fetch TMDB and AniList in parallel for better performance
-        var needTmdbFetch = cachedImages == null || string.IsNullOrEmpty(cachedImages.BackdropUrl);
+        var oriTitle = subjectDetail.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+        var chTitle = subjectDetail.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+        var chDesc = subjectDetail.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
+        var airDate = subjectDetail.TryGetProperty("date", out var dateEl) ? dateEl.GetString() : null;
 
-        var tmdbTask = needTmdbFetch
-            ? FetchTmdbDataAsync(oriTitle, airDate, cancellationToken)
-            : Task.FromResult<Models.TMDBAnimeInfo?>(null);
-        var anilistTask = FetchAniListDataAsync(oriTitle, cancellationToken);
+        var score = subjectDetail.TryGetProperty("rating", out var rating) &&
+                    rating.TryGetProperty("score", out var scoreEl)
+                    ? scoreEl.GetDouble().ToString("F1")
+                    : "0";
 
-        // Wait for both to complete (parallel execution)
-        await Task.WhenAll(tmdbTask, anilistTask).ConfigureAwait(false);
+        var portraitUrl = subjectDetail.TryGetProperty("images", out var images) &&
+                         images.TryGetProperty("large", out var large)
+                         ? large.GetString() ?? ""
+                         : "";
 
-        tmdbResult = await tmdbTask;
-        var anilistResult = await anilistTask;
+        bool containsJapanese = !string.IsNullOrEmpty(oriTitle) &&
+            System.Text.RegularExpressions.Regex.IsMatch(oriTitle, @"[\p{IsHiragana}\p{IsKatakana}]");
 
-        // Cache TMDB images if fetched successfully
-        if (needTmdbFetch && tmdbResult != null)
+        // Fetch TMDB and AniList in parallel
+        var tmdbTask = _tmdbClient.GetAnimeSummaryAndBackdropAsync(oriTitle, airDate);
+        var anilistTask = _aniListClient.GetAnimeInfoAsync(oriTitle);
+
+        try
         {
-            var posterUrl = anime.TryGetProperty("images", out var imgProp) && imgProp.ValueKind != JsonValueKind.Null &&
-                          imgProp.TryGetProperty("large", out var largeImage) && largeImage.ValueKind != JsonValueKind.Null
-                          ? largeImage.GetString()
-                          : null;
-
-            await _cacheService.CacheAnimeImagesAsync(
-                bangumiId,
-                posterUrl,
-                tmdbResult.BackdropUrl,
-                null).ConfigureAwait(false);
-
-            backdropUrl = tmdbResult.BackdropUrl;
-            _logger.LogInformation("Cached images for {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
+            await Task.WhenAll(tmdbTask, anilistTask);
         }
-        else if (!needTmdbFetch)
+        catch { /* Continue with partial results */ }
+
+        var tmdbResult = tmdbTask.IsCompletedSuccessfully ? await tmdbTask : null;
+        var anilistResult = anilistTask.IsCompletedSuccessfully ? await anilistTask : null;
+
+        // Determine final values
+        var jpTitle = containsJapanese ? oriTitle : "";
+        var enTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "";
+
+        // Skip if no valid title
+        if (string.IsNullOrEmpty(jpTitle) && string.IsNullOrEmpty(chTitle) && string.IsNullOrEmpty(enTitle))
         {
-            _logger.LogInformation("Using cached images for {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
-        }
-
-        // Build enriched anime DTO (strongly typed)
-        var portraitUrl = anime.TryGetProperty("images", out var images) && images.ValueKind != JsonValueKind.Null &&
-                images.TryGetProperty("large", out var large) && large.ValueKind != JsonValueKind.Null
-                ? large.GetString() ?? ""
-                : "";
-
-        // Determine final titles with fallback
-        var jpTitle = containsJapaneseInOriTitle ? oriTitle : "";
-        var finalChTitle = containsPureChineseInOriTitle ? oriTitle : chTitle;
-        var finalEnTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "";
-
-        // Skip anime if no valid title available
-        if (string.IsNullOrEmpty(jpTitle) && string.IsNullOrEmpty(finalChTitle) && string.IsNullOrEmpty(finalEnTitle))
-        {
-            _logger.LogWarning("Skipping anime (BangumiId: {BangumiId}) - no valid title available", bangumiId);
+            _logger.LogWarning("Skipping anime BangumiId {BangumiId} - no valid title", bangumiId);
             return null;
         }
 
-        // Check if Bangumi summary contains Japanese (hiragana/katakana)
-        // If so, it's not a valid Chinese description
-        bool bangumiDescIsJapanese = !string.IsNullOrEmpty(chDesc) &&
+        // Check if description is Japanese
+        bool descIsJapanese = !string.IsNullOrEmpty(chDesc) &&
             System.Text.RegularExpressions.Regex.IsMatch(chDesc, @"[\p{IsHiragana}\p{IsKatakana}]");
 
-        // Build Chinese description with fallback chain
         string finalChDesc;
-        if (!string.IsNullOrEmpty(chDesc) && !bangumiDescIsJapanese)
-        {
-            // Bangumi has valid Chinese description
+        if (!string.IsNullOrEmpty(chDesc) && !descIsJapanese)
             finalChDesc = chDesc;
-        }
         else if (!string.IsNullOrEmpty(tmdbResult?.ChineseSummary))
-        {
-            // Fallback to TMDB Chinese
             finalChDesc = tmdbResult.ChineseSummary;
-        }
         else
-        {
-            // No Chinese description available
             finalChDesc = "无可用中文介绍";
-        }
 
-        // Build English description with fallback chain
         string finalEnDesc;
-        if (!string.IsNullOrEmpty(tmdbResult?.EnglishSummary))
-        {
+        if (!string.IsNullOrEmpty(tmdbResult?.EnglishSummary) &&
+            tmdbResult.EnglishSummary != "No English summary available." &&
+            tmdbResult.EnglishSummary != "No result found in TMDB.")
             finalEnDesc = tmdbResult.EnglishSummary;
-        }
         else if (!string.IsNullOrEmpty(anilistResult?.EnglishSummary))
-        {
             finalEnDesc = anilistResult.EnglishSummary;
-        }
         else
-        {
-            // No English description available
             finalEnDesc = "No English description available";
-        }
 
-        return new AnimeInfoDto
+        return new AnimeInfoEntity
         {
-            BangumiId = bangumiId.ToString(),
-            JpTitle = jpTitle,
-            ChTitle = finalChTitle,
-            EnTitle = finalEnTitle,
-            ChDesc = finalChDesc,
-            EnDesc = finalEnDesc,
+            BangumiId = bangumiId,
+            NameJapanese = jpTitle,
+            NameChinese = chTitle,
+            NameEnglish = enTitle,
+            DescChinese = finalChDesc,
+            DescEnglish = finalEnDesc,
             Score = score,
-            Images = new AnimeImagesDto
-            {
-                Portrait = portraitUrl,
-                Landscape = backdropUrl ?? ""
-            },
-            ExternalUrls = new ExternalUrlsDto
-            {
-                Bangumi = $"https://bgm.tv/subject/{bangumiId}",
-                Tmdb = tmdbResult?.OriSiteUrl ?? "",
-                Anilist = anilistResult?.OriSiteUrl ?? ""
-            }
+            ImagePortrait = portraitUrl,
+            ImageLandscape = tmdbResult?.BackdropUrl ?? "",
+            TmdbId = int.TryParse(tmdbResult?.TMDBID, out var tmdbId) ? tmdbId : null,
+            AnilistId = int.TryParse(anilistResult?.AnilistId, out var anilistId) ? anilistId : null,
+            UrlBangumi = $"https://bgm.tv/subject/{bangumiId}",
+            UrlTmdb = tmdbResult?.OriSiteUrl ?? "",
+            UrlAnilist = anilistResult?.OriSiteUrl ?? "",
+            AirDate = airDate,
+            Weekday = weekday,
+            IsPreFetched = false // Real-time fetched
         };
     }
 
-    private async Task<Models.TMDBAnimeInfo?> FetchTmdbDataAsync(string title, string? airDate, CancellationToken cancellationToken)
+    private async Task<AnimeListResponse> FetchAllFromApiAsync(
+        string bangumiToken,
+        string? tmdbToken,
+        int weekday,
+        CancellationToken cancellationToken)
     {
-        try
+        var (bangumiData, retryCount, apiSuccess) = await _resilienceService.ExecuteWithRetryAndMetadataAsync(
+            async ct => await _bangumiClient.GetDailyBroadcastAsync(),
+            "Bangumi.GetDailyBroadcast",
+            cancellationToken);
+
+        if (!apiSuccess || bangumiData.ValueKind == JsonValueKind.Undefined)
         {
-            return await _tmdbClient.GetAnimeSummaryAndBackdropAsync(title, airDate);
+            return new AnimeListResponse
+            {
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
+                Message = $"API request failed after {retryCount} retries",
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = retryCount
+            };
         }
-        catch (Exception ex)
+
+        var enrichedAnimes = new List<AnimeInfoEntity>();
+
+        foreach (var anime in bangumiData.EnumerateArray())
         {
-            _logger.LogWarning(ex, "TMDB fetch failed for '{Title}', continuing with AniList", title);
-            return null;
+            if (cancellationToken.IsCancellationRequested)
+                break;
+
+            try
+            {
+                var bangumiId = anime.GetProperty("id").GetInt32();
+                var enriched = await FetchSingleAnimeAsync(bangumiId, weekday, cancellationToken);
+                if (enriched != null)
+                {
+                    enrichedAnimes.Add(enriched);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing individual anime");
+            }
         }
+
+        // Save to database
+        if (enrichedAnimes.Count > 0)
+        {
+            await _repository.SaveAnimeInfoBatchAsync(enrichedAnimes);
+        }
+
+        var animeDtos = enrichedAnimes.Select(ConvertEntityToDto).ToList();
+
+        // Also cache in memory for quick access
+        await _cacheService.CacheAnimeListAsync(animeDtos);
+
+        return new AnimeListResponse
+        {
+            Success = true,
+            DataSource = DataSource.Api,
+            IsStale = false,
+            Message = retryCount > 0
+                ? $"Data refreshed from API (succeeded after {retryCount} retries)"
+                : "Data refreshed from API",
+            LastUpdated = DateTime.UtcNow,
+            Count = animeDtos.Count,
+            Animes = animeDtos,
+            RetryAttempts = retryCount
+        };
     }
 
-    private async Task<Models.AniListAnimeInfo?> FetchAniListDataAsync(string title, CancellationToken cancellationToken)
+    private static AnimeInfoDto ConvertEntityToDto(AnimeInfoEntity entity)
     {
-        try
+        return new AnimeInfoDto
         {
-            return await _aniListClient.GetAnimeInfoAsync(title);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "AniList fetch failed for '{Title}'", title);
-            return null;
-        }
+            BangumiId = entity.BangumiId.ToString(),
+            JpTitle = entity.NameJapanese ?? "",
+            ChTitle = entity.NameChinese ?? "",
+            EnTitle = entity.NameEnglish ?? "",
+            ChDesc = entity.DescChinese ?? "无可用中文介绍",
+            EnDesc = entity.DescEnglish ?? "No English description available",
+            Score = entity.Score ?? "0",
+            Images = new AnimeImagesDto
+            {
+                Portrait = entity.ImagePortrait ?? "",
+                Landscape = entity.ImageLandscape ?? ""
+            },
+            ExternalUrls = new ExternalUrlsDto
+            {
+                Bangumi = entity.UrlBangumi ?? $"https://bgm.tv/subject/{entity.BangumiId}",
+                Tmdb = entity.UrlTmdb ?? "",
+                Anilist = entity.UrlAnilist ?? ""
+            }
+        };
     }
 }

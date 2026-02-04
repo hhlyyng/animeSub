@@ -67,5 +67,44 @@ namespace backend.Services.Implementations
                 return -1;
             }
         }
+
+        public Task<JsonElement> GetSubjectDetailAsync(int subjectId) =>
+            ExecuteAsync(async () =>
+            {
+                EnsureTokenSet();
+
+                var response = await HttpClient.GetAsync($"v0/subjects/{subjectId}");
+                response.EnsureSuccessStatusCode();
+
+                var content = await response.Content.ReadAsStringAsync();
+                var subjectDetail = JsonDocument.Parse(content).RootElement;
+
+                Logger.LogInformation("Retrieved subject detail for ID {SubjectId}", subjectId);
+                return subjectDetail;
+            }, $"GetSubjectDetail({subjectId})");
+
+        public Task<JsonElement> GetFullCalendarAsync() =>
+            ExecuteAsync(async () =>
+            {
+                EnsureTokenSet();
+
+                var response = await HttpClient.GetAsync("calendar");
+                response.EnsureSuccessStatusCode();
+
+                var content = await response.Content.ReadAsStringAsync();
+                var fullCalendar = JsonDocument.Parse(content).RootElement;
+
+                int totalAnime = 0;
+                foreach (var dayElement in fullCalendar.EnumerateArray())
+                {
+                    if (dayElement.TryGetProperty("items", out var items))
+                    {
+                        totalAnime += items.EnumerateArray().Count();
+                    }
+                }
+
+                Logger.LogInformation("Retrieved full calendar with {Count} total anime", totalAnime);
+                return fullCalendar;
+            }, "GetFullCalendar");
     }
 }

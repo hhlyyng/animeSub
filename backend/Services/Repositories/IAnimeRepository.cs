@@ -15,10 +15,16 @@ public interface IAnimeRepository
     // Anime info
     Task<AnimeInfoEntity?> GetAnimeInfoAsync(int bangumiId);
     Task SaveAnimeInfoAsync(AnimeInfoEntity anime);
+    Task SaveAnimeInfoBatchAsync(List<AnimeInfoEntity> animes);
     Task<List<AnimeInfoEntity>> GetAnimeInfoBatchAsync(List<int> bangumiIds);
+    Task<List<AnimeInfoEntity>> GetAnimesByWeekdayAsync(int weekday);
+    Task<List<AnimeInfoEntity>> GetPreFetchedAnimesAsync(List<int> bangumiIds);
 
     // Anime images
     Task<AnimeImagesEntity?> GetAnimeImagesAsync(int bangumiId);
     Task SaveAnimeImagesAsync(AnimeImagesEntity images);
     Task<List<AnimeImagesEntity>> GetAnimeImagesBatchAsync(List<int> bangumiIds);
+
+    // Maintenance
+    Task ClearAllAnimeDataAsync();
 }

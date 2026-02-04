@@ -44,6 +44,10 @@ builder.Services.Configure<backend.Models.Configuration.MikanConfiguration>(
 builder.Services.Configure<backend.Models.Configuration.QBittorrentConfiguration>(
     builder.Configuration.GetSection(backend.Models.Configuration.QBittorrentConfiguration.SectionName));
 
+// Bind PreFetch configuration
+builder.Services.Configure<PreFetchConfig>(
+    builder.Configuration.GetSection(PreFetchConfig.SectionName));
+
 // Add controllers
 builder.Services.AddControllers();
 
@@ -136,6 +140,7 @@ builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 
 // Register background services
 builder.Services.AddHostedService<backend.Services.Background.RssPollingService>();
+builder.Services.AddHostedService<backend.Services.Background.AnimePreFetchService>();
 
 // Register resilience service (Polly retry policies)
 builder.Services.AddSingleton<IResilienceService, ResilienceService>();
