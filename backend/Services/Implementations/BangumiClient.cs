@@ -106,5 +106,45 @@ namespace backend.Services.Implementations
                 Logger.LogInformation("Retrieved full calendar with {Count} total anime", totalAnime);
                 return fullCalendar;
             }, "GetFullCalendar");
+
+        public Task<JsonElement> SearchTopSubjectsAsync(int limit = 10) =>
+            ExecuteAsync(async () =>
+            {
+                EnsureTokenSet();
+
+                // Bangumi API: POST /v0/search/subjects
+                // Search for anime (type=2) sorted by rank
+                var requestBody = new
+                {
+                    keyword = "",
+                    filter = new
+                    {
+                        type = new[] { 2 }, // Anime type
+                        rank = new[] { $">0" } // Has ranking
+                    },
+                    sort = "rank"
+                };
+
+                var jsonContent = new StringContent(
+                    System.Text.Json.JsonSerializer.Serialize(requestBody),
+                    System.Text.Encoding.UTF8,
+                    "application/json");
+
+                var response = await HttpClient.PostAsync($"v0/search/subjects?limit={limit}", jsonContent);
+                response.EnsureSuccessStatusCode();
+
+                var content = await response.Content.ReadAsStringAsync();
+                var result = JsonDocument.Parse(content).RootElement;
+
+                if (result.TryGetProperty("data", out var data))
+                {
+                    Logger.LogInformation("Retrieved {Count} top subjects from Bangumi search",
+                        data.EnumerateArray().Count());
+                    return data;
+                }
+
+                Logger.LogWarning("No data property in Bangumi search response");
+                return result;
+            }, "SearchTopSubjects");
     }
 }

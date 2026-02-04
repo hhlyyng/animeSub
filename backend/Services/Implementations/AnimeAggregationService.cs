@@ -2,6 +2,7 @@ using System.Text.Json;
 using backend.Data.Entities;
 using backend.Models;
 using backend.Models.Dtos;
+using backend.Models.Jikan;
 using backend.Services.Interfaces;
 using backend.Services.Repositories;
 
@@ -16,6 +17,7 @@ public class AnimeAggregationService : IAnimeAggregationService
     private readonly IBangumiClient _bangumiClient;
     private readonly ITMDBClient _tmdbClient;
     private readonly IAniListClient _aniListClient;
+    private readonly IJikanClient _jikanClient;
     private readonly IAnimeRepository _repository;
     private readonly IAnimeCacheService _cacheService;
     private readonly IResilienceService _resilienceService;
@@ -25,6 +27,7 @@ public class AnimeAggregationService : IAnimeAggregationService
         IBangumiClient bangumiClient,
         ITMDBClient tmdbClient,
         IAniListClient aniListClient,
+        IJikanClient jikanClient,
         IAnimeRepository repository,
         IAnimeCacheService cacheService,
         IResilienceService resilienceService,
@@ -33,6 +36,7 @@ public class AnimeAggregationService : IAnimeAggregationService
         _bangumiClient = bangumiClient ?? throw new ArgumentNullException(nameof(bangumiClient));
         _tmdbClient = tmdbClient ?? throw new ArgumentNullException(nameof(tmdbClient));
         _aniListClient = aniListClient ?? throw new ArgumentNullException(nameof(aniListClient));
+        _jikanClient = jikanClient ?? throw new ArgumentNullException(nameof(jikanClient));
         _repository = repository ?? throw new ArgumentNullException(nameof(repository));
         _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
         _resilienceService = resilienceService ?? throw new ArgumentNullException(nameof(resilienceService));
@@ -384,5 +388,237 @@ public class AnimeAggregationService : IAnimeAggregationService
                 Anilist = entity.UrlAnilist ?? ""
             }
         };
+    }
+
+    public async Task<AnimeListResponse> GetTopAnimeFromBangumiAsync(
+        string bangumiToken,
+        int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(bangumiToken))
+            throw new ArgumentException("Bangumi token is required", nameof(bangumiToken));
+
+        _bangumiClient.SetToken(bangumiToken);
+        _logger.LogInformation("Fetching top {Limit} anime from Bangumi", limit);
+
+        try
+        {
+            var topSubjects = await _bangumiClient.SearchTopSubjectsAsync(limit);
+
+            var animeDtos = new List<AnimeInfoDto>();
+
+            foreach (var subject in topSubjects.EnumerateArray())
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                var id = subject.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+                if (id == 0) continue;
+
+                var name = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                var nameCn = subject.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+                var summary = subject.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
+
+                var score = subject.TryGetProperty("score", out var scoreEl)
+                    ? scoreEl.GetDouble().ToString("F1")
+                    : "0";
+
+                var imageUrl = subject.TryGetProperty("images", out var images) &&
+                              images.TryGetProperty("large", out var large)
+                              ? large.GetString() ?? ""
+                              : "";
+
+                animeDtos.Add(new AnimeInfoDto
+                {
+                    BangumiId = id.ToString(),
+                    JpTitle = name,
+                    ChTitle = nameCn,
+                    EnTitle = "",
+                    ChDesc = string.IsNullOrEmpty(summary) ? "无可用中文介绍" : summary,
+                    EnDesc = "No English description available",
+                    Score = score,
+                    Images = new AnimeImagesDto
+                    {
+                        Portrait = imageUrl,
+                        Landscape = ""
+                    },
+                    ExternalUrls = new ExternalUrlsDto
+                    {
+                        Bangumi = $"https://bgm.tv/subject/{id}",
+                        Tmdb = "",
+                        Anilist = ""
+                    }
+                });
+            }
+
+            _logger.LogInformation("Retrieved {Count} top anime from Bangumi", animeDtos.Count);
+
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
+                Message = $"Top {animeDtos.Count} anime from Bangumi",
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch top anime from Bangumi");
+            return new AnimeListResponse
+            {
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
+                Message = $"Failed to fetch Bangumi top anime: {ex.Message}",
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
+            };
+        }
+    }
+
+    public async Task<AnimeListResponse> GetTopAnimeFromAniListAsync(
+        int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Fetching top {Limit} trending anime from AniList", limit);
+
+        try
+        {
+            var trendingAnime = await _aniListClient.GetTrendingAnimeAsync(limit);
+
+            var animeDtos = trendingAnime.Select(anime => new AnimeInfoDto
+            {
+                BangumiId = "", // AniList doesn't have Bangumi ID
+                JpTitle = anime.NativeTitle,
+                ChTitle = "",
+                EnTitle = anime.EnglishTitle,
+                ChDesc = "无可用中文介绍",
+                EnDesc = string.IsNullOrEmpty(anime.EnglishSummary)
+                    ? "No English description available"
+                    : StripHtmlTags(anime.EnglishSummary),
+                Score = anime.Score,
+                Images = new AnimeImagesDto
+                {
+                    Portrait = anime.CoverUrl,
+                    Landscape = anime.BannerImage
+                },
+                ExternalUrls = new ExternalUrlsDto
+                {
+                    Bangumi = "",
+                    Tmdb = "",
+                    Anilist = anime.OriSiteUrl
+                }
+            }).ToList();
+
+            _logger.LogInformation("Retrieved {Count} trending anime from AniList", animeDtos.Count);
+
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
+                Message = $"Top {animeDtos.Count} trending anime from AniList",
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch trending anime from AniList");
+            return new AnimeListResponse
+            {
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
+                Message = $"Failed to fetch AniList trending anime: {ex.Message}",
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
+            };
+        }
+    }
+
+    public async Task<AnimeListResponse> GetTopAnimeFromMALAsync(
+        int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Fetching top {Limit} anime from MAL via Jikan", limit);
+
+        try
+        {
+            var topAnime = await _jikanClient.GetTopAnimeAsync(limit);
+
+            var animeDtos = topAnime.Select(anime => new AnimeInfoDto
+            {
+                BangumiId = "", // MAL doesn't have Bangumi ID
+                JpTitle = anime.TitleJapanese ?? "",
+                ChTitle = "",
+                EnTitle = anime.TitleEnglish ?? anime.Title,
+                ChDesc = "无可用中文介绍",
+                EnDesc = string.IsNullOrEmpty(anime.Synopsis)
+                    ? "No English description available"
+                    : anime.Synopsis,
+                Score = anime.Score?.ToString("F1") ?? "0",
+                Images = new AnimeImagesDto
+                {
+                    Portrait = anime.Images?.Jpg?.LargeImageUrl ?? anime.Images?.Jpg?.ImageUrl ?? "",
+                    Landscape = ""
+                },
+                ExternalUrls = new ExternalUrlsDto
+                {
+                    Bangumi = "",
+                    Tmdb = "",
+                    Anilist = "",
+                    Mal = anime.Url
+                }
+            }).ToList();
+
+            _logger.LogInformation("Retrieved {Count} top anime from MAL", animeDtos.Count);
+
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
+                Message = $"Top {animeDtos.Count} anime from MyAnimeList",
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch top anime from MAL");
+            return new AnimeListResponse
+            {
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
+                Message = $"Failed to fetch MAL top anime: {ex.Message}",
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
+            };
+        }
+    }
+
+    private static string StripHtmlTags(string html)
+    {
+        if (string.IsNullOrEmpty(html))
+            return html;
+
+        // Simple regex to strip HTML tags
+        return System.Text.RegularExpressions.Regex.Replace(html, "<[^>]*>", "");
     }
 }

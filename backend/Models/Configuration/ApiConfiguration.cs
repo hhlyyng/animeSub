@@ -10,6 +10,7 @@ public class ApiConfiguration
     public BangumiConfig Bangumi { get; set; } = new();
     public TMDBConfig TMDB { get; set; } = new();
     public AniListConfig AniList { get; set; } = new();
+    public JikanConfig Jikan { get; set; } = new();
 }
 
 /// <summary>
@@ -58,6 +59,22 @@ public class AniListConfig
     /// GraphQL endpoint for AniList (default: https://graphql.anilist.co)
     /// </summary>
     public string BaseUrl { get; set; } = "https://graphql.anilist.co";
+
+    /// <summary>
+    /// Request timeout in seconds
+    /// </summary>
+    public int TimeoutSeconds { get; set; } = 30;
+}
+
+/// <summary>
+/// Jikan API configuration (MyAnimeList unofficial API)
+/// </summary>
+public class JikanConfig
+{
+    /// <summary>
+    /// Base URL for Jikan API (default: https://api.jikan.moe/v4)
+    /// </summary>
+    public string BaseUrl { get; set; } = "https://api.jikan.moe/v4";
 
     /// <summary>
     /// Request timeout in seconds

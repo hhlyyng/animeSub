@@ -31,6 +31,13 @@ public interface IBangumiClient
     Task<JsonElement> GetFullCalendarAsync();
 
     /// <summary>
+    /// Search for top-ranked anime subjects
+    /// </summary>
+    /// <param name="limit">Number of subjects to retrieve</param>
+    /// <returns>JsonElement containing ranked anime list</returns>
+    Task<JsonElement> SearchTopSubjectsAsync(int limit = 10);
+
+    /// <summary>
     /// Set the API authentication token
     /// </summary>
     void SetToken(string token);

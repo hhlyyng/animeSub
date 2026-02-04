@@ -24,4 +24,10 @@ public class ExternalUrlsDto
     /// </summary>
     [JsonPropertyName("anilist")]
     public string Anilist { get; set; } = string.Empty;
+
+    /// <summary>
+    /// MyAnimeList website URL
+    /// </summary>
+    [JsonPropertyName("mal")]
+    public string Mal { get; set; } = string.Empty;
 }

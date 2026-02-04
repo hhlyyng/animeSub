@@ -11,4 +11,11 @@ public interface IAniListClient
     /// Get anime information from AniList by Japanese title
     /// </summary>
     Task<AniListAnimeInfo?> GetAnimeInfoAsync(string japaneseTitle);
+
+    /// <summary>
+    /// Get trending anime from AniList
+    /// </summary>
+    /// <param name="limit">Number of anime to retrieve</param>
+    /// <returns>List of trending anime</returns>
+    Task<List<AniListAnimeInfo>> GetTrendingAnimeAsync(int limit = 10);
 }
