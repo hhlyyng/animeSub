@@ -222,6 +222,35 @@ public class AnimeAggregationService : IAnimeAggregationService
 
         _logger.LogInformation("Processing anime: {Title} (BangumiId: {BangumiId})", oriTitle, bangumiId);
 
+        // Fetch full subject detail if summary is empty (calendar API doesn't include summary)
+        if (string.IsNullOrEmpty(chDesc) || string.IsNullOrEmpty(chTitle))
+        {
+            try
+            {
+                var subjectDetail = await _bangumiClient.GetSubjectDetailAsync(bangumiId);
+
+                if (string.IsNullOrEmpty(chDesc) &&
+                    subjectDetail.TryGetProperty("summary", out var detailSummary) &&
+                    detailSummary.ValueKind != JsonValueKind.Null)
+                {
+                    chDesc = detailSummary.GetString() ?? "";
+                    _logger.LogInformation("Fetched Chinese description from subject detail for {Title}", oriTitle);
+                }
+
+                if (string.IsNullOrEmpty(chTitle) &&
+                    subjectDetail.TryGetProperty("name_cn", out var detailNameCn) &&
+                    detailNameCn.ValueKind != JsonValueKind.Null)
+                {
+                    chTitle = detailNameCn.GetString() ?? "";
+                    _logger.LogInformation("Fetched Chinese title from subject detail for {Title}", oriTitle);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to fetch subject detail for {BangumiId}, continuing without Chinese description", bangumiId);
+            }
+        }
+
         // Check cache for images first
         var cachedImages = await _cacheService.GetAnimeImagesCachedAsync(bangumiId);
 
@@ -276,7 +305,9 @@ public class AnimeAggregationService : IAnimeAggregationService
             JpTitle = containsJapaneseInOriTitle ? oriTitle : "",
             ChTitle = containsPureChineseInOriTitle ? oriTitle : chTitle,
             EnTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "",
-            ChDesc = chDesc,
+            ChDesc = !string.IsNullOrEmpty(chDesc)
+                ? chDesc
+                : (tmdbResult?.ChineseSummary ?? ""),
             EnDesc = tmdbResult?.EnglishSummary ?? anilistResult?.EnglishSummary ?? "",
             Score = score,
             Images = new AnimeImagesDto

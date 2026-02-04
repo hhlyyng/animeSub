@@ -63,7 +63,61 @@ namespace backend.Services.Implementations
                     return new TMDBAnimeInfo { EnglishSummary = "No result found in TMDB.", BackdropUrl = "" };
                 }
 
-                var first = results[0];
+                // Prioritize anime results: prefer Animation genre (16) + Japanese origin
+                JsonElement? bestMatch = null;
+
+                foreach (var item in results.EnumerateArray())
+                {
+                    bool isAnimation = false;
+                    bool isJapanese = false;
+
+                    // Check genre_ids for Animation (16)
+                    if (item.TryGetProperty("genre_ids", out var genres) && genres.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var genre in genres.EnumerateArray())
+                        {
+                            if (genre.TryGetInt32(out var genreId) && genreId == 16)
+                            {
+                                isAnimation = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Check origin_country for JP
+                    if (item.TryGetProperty("origin_country", out var countries) && countries.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var country in countries.EnumerateArray())
+                        {
+                            if (country.GetString() == "JP")
+                            {
+                                isJapanese = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Perfect match: Animation + Japanese
+                    if (isAnimation && isJapanese)
+                    {
+                        bestMatch = item;
+                        Logger.LogInformation("Found Japanese anime match for '{Title}'", title);
+                        break;
+                    }
+
+                    // Second priority: Animation (any origin)
+                    if (isAnimation && bestMatch == null)
+                    {
+                        bestMatch = item;
+                    }
+                }
+
+                // Fallback to first result if no anime found
+                var first = bestMatch ?? results[0];
+                if (bestMatch == null)
+                {
+                    Logger.LogInformation("No anime match found for '{Title}', using first result", title);
+                }
 
                 int tvId = first.TryGetProperty("id", out var idEl) && idEl.TryGetInt32(out var idVal) ? idVal : 0;
                 string? enTitleFromSearch = first.TryGetProperty("name", out var nm) ? nm.GetString() : null;
