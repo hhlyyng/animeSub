@@ -101,4 +101,67 @@ public class AnimeController : ControllerBase
             message = response.Message
         });
     }
+
+    /// <summary>
+    /// Get top 10 anime from Bangumi rankings
+    /// </summary>
+    [HttpGet("top/bangumi")]
+    [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTopBangumi(CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Received request for Bangumi Top 10");
+
+        var bangumiToken = await _tokenStorage.GetBangumiTokenAsync()
+            ?? Request.Headers["X-Bangumi-Token"].FirstOrDefault();
+
+        var (validatedBangumiToken, _) = _tokenValidator.ValidateRequestTokens(bangumiToken, null);
+
+        var response = await _aggregationService.GetTopAnimeFromBangumiAsync(
+            validatedBangumiToken, 10, cancellationToken);
+
+        return Ok(new
+        {
+            success = response.Success,
+            data = new { count = response.Count, animes = response.Animes },
+            message = response.Message
+        });
+    }
+
+    /// <summary>
+    /// Get top 10 trending anime from AniList
+    /// </summary>
+    [HttpGet("top/anilist")]
+    [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTopAniList(CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Received request for AniList Top 10");
+
+        var response = await _aggregationService.GetTopAnimeFromAniListAsync(10, cancellationToken);
+
+        return Ok(new
+        {
+            success = response.Success,
+            data = new { count = response.Count, animes = response.Animes },
+            message = response.Message
+        });
+    }
+
+    /// <summary>
+    /// Get top 10 anime from MyAnimeList (via Jikan API)
+    /// </summary>
+    [HttpGet("top/mal")]
+    [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetTopMAL(CancellationToken cancellationToken = default)
+    {
+        _logger.LogInformation("Received request for MAL Top 10");
+
+        var response = await _aggregationService.GetTopAnimeFromMALAsync(10, cancellationToken);
+
+        return Ok(new
+        {
+            success = response.Success,
+            data = new { count = response.Count, animes = response.Animes },
+            message = response.Message
+        });
+    }
 }
