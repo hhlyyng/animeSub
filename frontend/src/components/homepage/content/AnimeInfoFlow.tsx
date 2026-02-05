@@ -9,6 +9,13 @@ type AnimeFlowProps = {
   items: AnimeInfo[];
 };
 
+// 卡片展开时的宽度变化：534px - 200px = 334px
+// 父容器居中时的位移补偿：334 / 2 = 167px
+const EXPAND_WIDTH_DIFF = 334;
+const TITLE_OFFSET_COMPENSATION = EXPAND_WIDTH_DIFF / 2;
+// 动画持续时间（与CSS transition-duration匹配）
+const ANIMATION_DURATION = 300;
+
 export function AnimeFlow({ topic, items }: AnimeFlowProps) {
   const [windowSize, setWindowSize] = useState(7); //default window size: 7
   const step = Math.max(1, windowSize - 1);
@@ -16,13 +23,46 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
   const total = items.length;
   const clampStart = (s: number) => Math.min(Math.max(0, s), Math.max(0, total - windowSize));
 
-  const cardContainerRef = useRef<HTMLDivElement>(null);
-  const [titleMargin, setTitleMargin] = useState(0);
+  // 追踪是否有卡片正在hover并展开
+  const [isCardExpanded, setIsCardExpanded] = useState(false);
+  // 锁定状态：卡片收缩动画进行中时锁定，阻止其他卡片展开
+  const [isHoverLocked, setIsHoverLocked] = useState(false);
+  const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Modal 状态
   const [selectedAnime, setSelectedAnime] = useState<AnimeInfo | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const setGlobalModalOpen = useAppStore((state) => state.setModalOpen);
+
+  // 处理卡片hover状态变化
+  const handleCardHoverChange = (isHovered: boolean, hasLandscape: boolean) => {
+    if (isHovered && hasLandscape) {
+      // 开始展开
+      if (lockTimeoutRef.current) {
+        clearTimeout(lockTimeoutRef.current);
+        lockTimeoutRef.current = null;
+      }
+      setIsHoverLocked(false);
+      setIsCardExpanded(true);
+    } else if (!isHovered && isCardExpanded) {
+      // 开始收缩 - 锁定并等待动画完成
+      setIsCardExpanded(false);
+      setIsHoverLocked(true);
+      lockTimeoutRef.current = setTimeout(() => {
+        setIsHoverLocked(false);
+        lockTimeoutRef.current = null;
+      }, ANIMATION_DURATION);
+    }
+  };
+
+  // 清理timeout
+  useEffect(() => {
+    return () => {
+      if (lockTimeoutRef.current) {
+        clearTimeout(lockTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleAnimeSelect = (anime: AnimeInfo) => {
     setSelectedAnime(anime);
@@ -56,16 +96,6 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
   const canGoLeft = startIndex > 0;
   const canGoRight = startIndex + windowSize < total;
 
-  useEffect(() => {
-    if (cardContainerRef.current) {
-      const rect = cardContainerRef.current.getBoundingClientRect();
-      const parentRect = cardContainerRef.current.parentElement?.getBoundingClientRect();
-      if (parentRect) {
-        setTitleMargin(rect.left - parentRect.left);
-      }
-    }
-  }, [canGoLeft, canGoRight, windowSize]);
-
   const goLeft = () => canGoLeft && setStartIndex(s => clampStart(s - step));
   const goRight = () => canGoRight && setStartIndex(s => clampStart(s + step));
 
@@ -73,93 +103,102 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
 
   return (
   <>
-  <div className="w-fit overflow-hidden">
-    {/* 标题 */}
-    <h2 className="text-2xl font-bold text-gray-900 mb-6"
-        style={{ marginLeft: `${titleMargin}px` }}>
-      {topic}</h2>
-    
-    {/* 整体容器 - 使用 flex 布局 */}
-    <div className="flex w-full items-start gap-4">
-      {/* 左按钮 */}
-      {canGoLeft ? (
-        <button
-          onClick={goLeft}
-          className="flex-shrink-0 w-12 h-12 flex items-center justify-center
-                   bg-white/10 hover:bg-white/90 
-                   shadow-lg rounded-lg
-                   transition-all duration-200
-                   backdrop-blur-sm
-                   mt-32
-                   z-50 relative"
-        >
-          <svg 
-            className="w-8 h-8 shrink-0" 
-            fill="none" 
-            stroke="currentColor" 
-            viewBox="0 0 24 24"
-            strokeWidth={2}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
-      ) : (
-        <div className="w-12 h-12 flex-shrink-0"></div>
-        // 占位，保持布局对称
-      )}
-      
-      {/* 卡片流容器 */}
-      <div className="flex-1 min-w-0 overflow-hidden" ref={cardContainerRef}>
-        <div className="flex w-max gap-4 transition-transform duration-500 ease-in-out">
-          {visible.map(anime => (
-            <div 
-              key={anime.bangumi_id} 
-              className="flex-shrink-0"
-              style={{ minWidth: '200px' }}
-            >
-              <AnimeCard anime={anime} onSelect={() => handleAnimeSelect(anime)} />
-            </div>
-          ))}
-        </div>
+    {/* 外层容器 - 控制整个AnimeFlow */}
+    <div className="flex flex-col">
+      {/* 标题区域 - 左边距与卡片对齐，hover展开时补偿位移 */}
+      <div
+        className="mb-4 transition-[margin] duration-300 ease-in-out"
+        style={{ marginLeft: `${64 + (isCardExpanded ? TITLE_OFFSET_COMPENSATION : 0)}px` }}
+      >
+        <h2 className="text-2xl font-bold text-gray-900">
+          {topic}
+        </h2>
       </div>
-      
-      {/* 右按钮 */}
-      {canGoRight ? (
-        <button
-          onClick={goRight}
-          className="flex-shrink-0 w-12 h-12 flex items-center justify-center
-                   bg-white/10 hover:bg-white/90 
-                   shadow-lg rounded-lg
-                   transition-all duration-200
-                   backdrop-blur-sm
-                   mt-32
-                   z-50 "
-        >
-          <svg 
-            className="w-8 h-8 shrink-0" 
-            fill="none" 
-            stroke="currentColor" 
-            viewBox="0 0 24 24"
-            strokeWidth={2}
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
-        </button>
-      ) : (
-        <div className="w-12 h-12 flex-shrink-0"></div>
-        // 占位，保持布局对称
-      )}
-    </div>
-  </div>
 
-  {/* Modal */}
-  {selectedAnime && (
-    <AnimeDetailModal
-      anime={selectedAnime}
-      open={isModalOpen}
-      onClose={handleCloseModal}
-    />
-  )}
+      {/* 卡片流区域 */}
+      <div className="flex items-start gap-4">
+        {/* 左按钮 */}
+        {canGoLeft ? (
+          <button
+            onClick={goLeft}
+            className="flex-shrink-0 w-12 h-12 flex items-center justify-center
+                     bg-white/10 hover:bg-white/90
+                     shadow-lg rounded-lg
+                     transition-all duration-200
+                     backdrop-blur-sm
+                     mt-32
+                     z-50 relative"
+          >
+            <svg
+              className="w-8 h-8 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+        ) : (
+          <div className="w-12 h-12 flex-shrink-0"></div>
+        )}
+
+        {/* 卡片流容器 */}
+        <div className="flex-1 min-w-0 overflow-visible">
+          <div className="flex w-max gap-4 transition-transform duration-500 ease-in-out">
+            {visible.map(anime => (
+              <div
+                key={anime.bangumi_id}
+                className="flex-shrink-0"
+                style={{ minWidth: '200px' }}
+              >
+                <AnimeCard
+                  anime={anime}
+                  onSelect={() => handleAnimeSelect(anime)}
+                  onHoverChange={handleCardHoverChange}
+                  isHoverLocked={isHoverLocked}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 右按钮 */}
+        {canGoRight ? (
+          <button
+            onClick={goRight}
+            className="flex-shrink-0 w-12 h-12 flex items-center justify-center
+                     bg-white/10 hover:bg-white/90
+                     shadow-lg rounded-lg
+                     transition-all duration-200
+                     backdrop-blur-sm
+                     mt-32
+                     z-50"
+          >
+            <svg
+              className="w-8 h-8 shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+        ) : (
+          <div className="w-12 h-12 flex-shrink-0"></div>
+        )}
+      </div>
+    </div>
+
+    {/* Modal */}
+    {selectedAnime && (
+      <AnimeDetailModal
+        anime={selectedAnime}
+        open={isModalOpen}
+        onClose={handleCloseModal}
+      />
+    )}
   </>
 );
 }

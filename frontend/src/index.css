@@ -131,3 +131,13 @@ nav.sidebar-block-div {
 .content-header {
   @apply pt-16;
 }
+
+/* 每个 AnimeFlow 的独立容器 - 居中显示，宽度独立 */
+.anime-flow-container {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-bottom: 1rem;
+  overflow: hidden;
+  contain: layout;
+}

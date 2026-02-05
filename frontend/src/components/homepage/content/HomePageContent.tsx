@@ -151,11 +151,27 @@ const HomeContent = () => {
     }
 
     return (
-        <div className="w-fit overflow-hidden content-header">
-            {todayAnimes.length > 0 && <AnimeFlow topic={texts.todayTopic} items={todayAnimes} />}
-            {bangumiTop10.length > 0 && <AnimeFlow topic={texts.bangumiTopic} items={bangumiTop10} />}
-            {anilistTop10.length > 0 && <AnimeFlow topic={texts.anilistTopic} items={anilistTop10} />}
-            {malTop10.length > 0 && <AnimeFlow topic={texts.malTopic} items={malTop10} />}
+        <div className="content-header w-full">
+            {todayAnimes.length > 0 && (
+                <div className="anime-flow-container">
+                    <AnimeFlow topic={texts.todayTopic} items={todayAnimes} />
+                </div>
+            )}
+            {bangumiTop10.length > 0 && (
+                <div className="anime-flow-container">
+                    <AnimeFlow topic={texts.bangumiTopic} items={bangumiTop10} />
+                </div>
+            )}
+            {anilistTop10.length > 0 && (
+                <div className="anime-flow-container">
+                    <AnimeFlow topic={texts.anilistTopic} items={anilistTop10} />
+                </div>
+            )}
+            {malTop10.length > 0 && (
+                <div className="anime-flow-container">
+                    <AnimeFlow topic={texts.malTopic} items={malTop10} />
+                </div>
+            )}
         </div>
     );
 };
