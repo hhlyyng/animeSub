@@ -90,6 +90,14 @@ public class AnimeAggregationService : IAnimeAggregationService
                     }
                 }
 
+                // Step 3: Enrich anime missing landscape images (if TMDB token available)
+                var animesNeedingLandscape = preFetchedAnimes.Where(a => string.IsNullOrEmpty(a.ImageLandscape)).ToList();
+                if (animesNeedingLandscape.Count > 0)
+                {
+                    _logger.LogInformation("Enriching {Count} anime with missing landscape images", animesNeedingLandscape.Count);
+                    await EnrichMissingLandscapesAsync(animesNeedingLandscape, cancellationToken);
+                }
+
                 // Convert to DTOs
                 var animeDtos = preFetchedAnimes.Select(ConvertEntityToDto).ToList();
 
@@ -268,6 +276,11 @@ public class AnimeAggregationService : IAnimeAggregationService
         else
             finalEnDesc = "No English description available";
 
+        // Determine landscape image: TMDB backdrop > AniList banner
+        var landscapeUrl = !string.IsNullOrEmpty(tmdbResult?.BackdropUrl)
+            ? tmdbResult.BackdropUrl
+            : (anilistResult?.BannerImage ?? "");
+
         return new AnimeInfoEntity
         {
             BangumiId = bangumiId,
@@ -278,7 +291,7 @@ public class AnimeAggregationService : IAnimeAggregationService
             DescEnglish = finalEnDesc,
             Score = score,
             ImagePortrait = portraitUrl,
-            ImageLandscape = tmdbResult?.BackdropUrl ?? "",
+            ImageLandscape = landscapeUrl,
             TmdbId = int.TryParse(tmdbResult?.TMDBID, out var tmdbId) ? tmdbId : null,
             AnilistId = int.TryParse(anilistResult?.AnilistId, out var anilistId) ? anilistId : null,
             UrlBangumi = $"https://bgm.tv/subject/{bangumiId}",
@@ -645,6 +658,46 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     #region Enrichment Helper Methods
+
+    /// <summary>
+    /// Enrich anime entities that are missing landscape images
+    /// </summary>
+    private async Task EnrichMissingLandscapesAsync(List<AnimeInfoEntity> animes, CancellationToken cancellationToken)
+    {
+        foreach (var anime in animes)
+        {
+            if (cancellationToken.IsCancellationRequested) break;
+
+            try
+            {
+                var searchTitle = !string.IsNullOrEmpty(anime.NameJapanese)
+                    ? anime.NameJapanese
+                    : anime.NameChinese;
+
+                if (string.IsNullOrEmpty(searchTitle)) continue;
+
+                // Try TMDB first
+                var (_, _, landscapeUrl, _) = await EnrichWithTmdbAsync(searchTitle, anime.AirDate);
+
+                // If TMDB failed, try AniList
+                if (string.IsNullOrEmpty(landscapeUrl))
+                {
+                    var anilistData = await EnrichWithAniListAsync(searchTitle);
+                    landscapeUrl = anilistData?.BannerImage ?? "";
+                }
+
+                if (!string.IsNullOrEmpty(landscapeUrl))
+                {
+                    anime.ImageLandscape = landscapeUrl;
+                    _logger.LogDebug("Enriched landscape for '{Title}': {Url}", searchTitle, landscapeUrl);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to enrich landscape for anime {Id}", anime.BangumiId);
+            }
+        }
+    }
 
     /// <summary>
     /// Enrich anime data with TMDB (English title, description, landscape image)
