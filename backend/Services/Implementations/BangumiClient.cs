@@ -122,5 +122,49 @@ namespace backend.Services.Implementations
                 Logger.LogWarning("No data property in Bangumi response");
                 return result;
             }, "SearchTopSubjects");
+
+        public async Task<JsonElement> SearchByTitleAsync(string title)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(title))
+                {
+                    Logger.LogWarning("SearchByTitle called with empty title");
+                    return default;
+                }
+
+                Logger.LogInformation("Starting SearchByTitle({Title}) in BangumiClient", title);
+
+                // URL encode the title for safe query
+                var encodedTitle = Uri.EscapeDataString(title);
+                var response = await HttpClient.GetAsync($"search/subject/{encodedTitle}?type=2&responseGroup=small");
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Logger.LogWarning("Bangumi search failed for title: {Title}, status: {Status}",
+                        title, response.StatusCode);
+                    return default;
+                }
+
+                var content = await response.Content.ReadAsStringAsync();
+                var result = JsonDocument.Parse(content).RootElement;
+
+                if (result.TryGetProperty("list", out var list) && list.GetArrayLength() > 0)
+                {
+                    var firstResult = list[0];
+                    Logger.LogInformation("Found Bangumi match for '{Title}': ID {Id}",
+                        title, firstResult.GetProperty("id").GetInt32());
+                    return firstResult;
+                }
+
+                Logger.LogDebug("No Bangumi results for title: {Title}", title);
+                return default;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "SearchByTitle failed for: {Title}", title);
+                return default;
+            }
+        }
     }
 }

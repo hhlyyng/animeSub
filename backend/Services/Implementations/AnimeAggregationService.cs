@@ -397,70 +397,80 @@ public class AnimeAggregationService : IAnimeAggregationService
         // Bangumi public API doesn't require authentication
         if (!string.IsNullOrWhiteSpace(bangumiToken))
             _bangumiClient.SetToken(bangumiToken);
-        _logger.LogInformation("Fetching top {Limit} anime from Bangumi", limit);
+        _logger.LogInformation("Fetching top {Limit} anime from Bangumi with enrichment", limit);
 
         try
         {
             var topSubjects = await _bangumiClient.SearchTopSubjectsAsync(limit);
-
             var animeDtos = new List<AnimeInfoDto>();
 
             foreach (var subject in topSubjects.EnumerateArray())
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
+                if (cancellationToken.IsCancellationRequested) break;
 
                 var id = subject.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
                 if (id == 0) continue;
 
-                var name = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
-                var nameCn = subject.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
-                var summary = subject.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
+                var jpTitle = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                var chTitle = subject.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+                var chDesc = subject.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
+                var airDate = subject.TryGetProperty("date", out var dateEl) ? dateEl.GetString() : null;
 
-                var score = subject.TryGetProperty("score", out var scoreEl)
-                    ? scoreEl.GetDouble().ToString("F1")
-                    : "0";
+                // Get score from rating object
+                var score = "0";
+                if (subject.TryGetProperty("rating", out var rating) &&
+                    rating.TryGetProperty("score", out var scoreEl))
+                {
+                    score = scoreEl.GetDouble().ToString("F1");
+                }
 
-                var imageUrl = subject.TryGetProperty("images", out var images) &&
-                              images.TryGetProperty("large", out var large)
-                              ? large.GetString() ?? ""
-                              : "";
+                var portraitUrl = subject.TryGetProperty("images", out var images) &&
+                                  images.TryGetProperty("large", out var large)
+                                  ? large.GetString() ?? "" : "";
+
+                // Enrich with TMDB (landscape + English data)
+                var (enTitle, enDesc, landscapeUrl, tmdbUrl) = await EnrichWithTmdbAsync(jpTitle, airDate);
+
+                // If TMDB didn't return landscape, try AniList
+                var anilistUrl = "";
+                if (string.IsNullOrEmpty(landscapeUrl))
+                {
+                    var anilistData = await EnrichWithAniListAsync(jpTitle);
+                    if (anilistData != null)
+                    {
+                        landscapeUrl = anilistData.BannerImage ?? "";
+                        anilistUrl = anilistData.OriSiteUrl ?? "";
+                        if (string.IsNullOrEmpty(enTitle)) enTitle = anilistData.EnglishTitle ?? "";
+                        if (string.IsNullOrEmpty(enDesc)) enDesc = StripHtmlTags(anilistData.EnglishSummary ?? "");
+                    }
+                }
 
                 animeDtos.Add(new AnimeInfoDto
                 {
                     BangumiId = id.ToString(),
-                    JpTitle = name,
-                    ChTitle = nameCn,
-                    EnTitle = "",
-                    ChDesc = string.IsNullOrEmpty(summary) ? "无可用中文介绍" : summary,
-                    EnDesc = "No English description available",
+                    JpTitle = jpTitle,
+                    ChTitle = chTitle,
+                    EnTitle = enTitle,
+                    ChDesc = string.IsNullOrEmpty(chDesc) ? "无可用中文介绍" : chDesc,
+                    EnDesc = string.IsNullOrEmpty(enDesc) ? "No English description available" : enDesc,
                     Score = score,
-                    Images = new AnimeImagesDto
-                    {
-                        Portrait = imageUrl,
-                        Landscape = ""
-                    },
+                    Images = new AnimeImagesDto { Portrait = portraitUrl, Landscape = landscapeUrl },
                     ExternalUrls = new ExternalUrlsDto
                     {
                         Bangumi = $"https://bgm.tv/subject/{id}",
-                        Tmdb = "",
-                        Anilist = ""
+                        Tmdb = tmdbUrl,
+                        Anilist = anilistUrl
                     }
                 });
             }
 
-            _logger.LogInformation("Retrieved {Count} top anime from Bangumi", animeDtos.Count);
-
+            _logger.LogInformation("Retrieved {Count} top anime from Bangumi (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true,
-                DataSource = DataSource.Api,
-                IsStale = false,
-                Message = $"Top {animeDtos.Count} anime from Bangumi",
-                LastUpdated = DateTime.UtcNow,
-                Count = animeDtos.Count,
-                Animes = animeDtos,
-                RetryAttempts = 0
+                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Message = $"Top {animeDtos.Count} anime from Bangumi (enriched)",
+                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
+                Animes = animeDtos, RetryAttempts = 0
             };
         }
         catch (Exception ex)
@@ -468,14 +478,10 @@ public class AnimeAggregationService : IAnimeAggregationService
             _logger.LogError(ex, "Failed to fetch top anime from Bangumi");
             return new AnimeListResponse
             {
-                Success = false,
-                DataSource = DataSource.Api,
-                IsStale = true,
+                Success = false, DataSource = DataSource.Api, IsStale = true,
                 Message = $"Failed to fetch Bangumi top anime: {ex.Message}",
-                LastUpdated = null,
-                Count = 0,
-                Animes = new List<AnimeInfoDto>(),
-                RetryAttempts = 0
+                LastUpdated = null, Count = 0,
+                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
             };
         }
     }
@@ -484,48 +490,60 @@ public class AnimeAggregationService : IAnimeAggregationService
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Fetching top {Limit} trending anime from AniList", limit);
+        _logger.LogInformation("Fetching top {Limit} trending anime from AniList with enrichment", limit);
 
         try
         {
             var trendingAnime = await _aniListClient.GetTrendingAnimeAsync(limit);
+            var animeDtos = new List<AnimeInfoDto>();
 
-            var animeDtos = trendingAnime.Select(anime => new AnimeInfoDto
+            foreach (var anime in trendingAnime)
             {
-                BangumiId = "", // AniList doesn't have Bangumi ID
-                JpTitle = anime.NativeTitle,
-                ChTitle = "",
-                EnTitle = anime.EnglishTitle,
-                ChDesc = "无可用中文介绍",
-                EnDesc = string.IsNullOrEmpty(anime.EnglishSummary)
-                    ? "No English description available"
-                    : StripHtmlTags(anime.EnglishSummary),
-                Score = anime.Score,
-                Images = new AnimeImagesDto
+                if (cancellationToken.IsCancellationRequested) break;
+
+                var jpTitle = anime.NativeTitle ?? "";
+                var enTitle = anime.EnglishTitle ?? "";
+                var enDesc = StripHtmlTags(anime.EnglishSummary ?? "");
+                var landscapeUrl = anime.BannerImage ?? "";
+
+                // Enrich with Bangumi (Chinese data)
+                var (bangumiId, chTitle, chDesc, bangumiUrl) = await EnrichWithBangumiAsync(jpTitle, enTitle);
+
+                // If no landscape from AniList, try TMDB
+                var tmdbUrl = "";
+                if (string.IsNullOrEmpty(landscapeUrl))
                 {
-                    Portrait = anime.CoverUrl,
-                    Landscape = anime.BannerImage
-                },
-                ExternalUrls = new ExternalUrlsDto
-                {
-                    Bangumi = "",
-                    Tmdb = "",
-                    Anilist = anime.OriSiteUrl
+                    var (_, _, tmdbLandscape, tmdbUrlResult) = await EnrichWithTmdbAsync(jpTitle, null);
+                    landscapeUrl = tmdbLandscape;
+                    tmdbUrl = tmdbUrlResult;
                 }
-            }).ToList();
 
-            _logger.LogInformation("Retrieved {Count} trending anime from AniList", animeDtos.Count);
+                animeDtos.Add(new AnimeInfoDto
+                {
+                    BangumiId = bangumiId,
+                    JpTitle = jpTitle,
+                    ChTitle = chTitle,
+                    EnTitle = enTitle,
+                    ChDesc = string.IsNullOrEmpty(chDesc) ? "无可用中文介绍" : chDesc,
+                    EnDesc = string.IsNullOrEmpty(enDesc) ? "No English description available" : enDesc,
+                    Score = anime.Score ?? "0",
+                    Images = new AnimeImagesDto { Portrait = anime.CoverUrl ?? "", Landscape = landscapeUrl },
+                    ExternalUrls = new ExternalUrlsDto
+                    {
+                        Bangumi = bangumiUrl,
+                        Tmdb = tmdbUrl,
+                        Anilist = anime.OriSiteUrl ?? ""
+                    }
+                });
+            }
 
+            _logger.LogInformation("Retrieved {Count} trending anime from AniList (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true,
-                DataSource = DataSource.Api,
-                IsStale = false,
-                Message = $"Top {animeDtos.Count} trending anime from AniList",
-                LastUpdated = DateTime.UtcNow,
-                Count = animeDtos.Count,
-                Animes = animeDtos,
-                RetryAttempts = 0
+                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Message = $"Top {animeDtos.Count} trending anime from AniList (enriched)",
+                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
+                Animes = animeDtos, RetryAttempts = 0
             };
         }
         catch (Exception ex)
@@ -533,14 +551,10 @@ public class AnimeAggregationService : IAnimeAggregationService
             _logger.LogError(ex, "Failed to fetch trending anime from AniList");
             return new AnimeListResponse
             {
-                Success = false,
-                DataSource = DataSource.Api,
-                IsStale = true,
+                Success = false, DataSource = DataSource.Api, IsStale = true,
                 Message = $"Failed to fetch AniList trending anime: {ex.Message}",
-                LastUpdated = null,
-                Count = 0,
-                Animes = new List<AnimeInfoDto>(),
-                RetryAttempts = 0
+                LastUpdated = null, Count = 0,
+                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
             };
         }
     }
@@ -549,49 +563,72 @@ public class AnimeAggregationService : IAnimeAggregationService
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Fetching top {Limit} anime from MAL via Jikan", limit);
+        _logger.LogInformation("Fetching top {Limit} anime from MAL via Jikan with enrichment", limit);
 
         try
         {
             var topAnime = await _jikanClient.GetTopAnimeAsync(limit);
+            var animeDtos = new List<AnimeInfoDto>();
 
-            var animeDtos = topAnime.Select(anime => new AnimeInfoDto
+            foreach (var anime in topAnime)
             {
-                BangumiId = "", // MAL doesn't have Bangumi ID
-                JpTitle = anime.TitleJapanese ?? "",
-                ChTitle = "",
-                EnTitle = anime.TitleEnglish ?? anime.Title,
-                ChDesc = "无可用中文介绍",
-                EnDesc = string.IsNullOrEmpty(anime.Synopsis)
-                    ? "No English description available"
-                    : anime.Synopsis,
-                Score = anime.Score?.ToString("F1") ?? "0",
-                Images = new AnimeImagesDto
+                if (cancellationToken.IsCancellationRequested) break;
+
+                var jpTitle = anime.TitleJapanese ?? "";
+                var enTitle = anime.TitleEnglish ?? anime.Title ?? "";
+                var enDesc = anime.Synopsis ?? "";
+                var portraitUrl = anime.Images?.Jpg?.LargeImageUrl ?? anime.Images?.Jpg?.ImageUrl ?? "";
+
+                // Enrich with Bangumi (Chinese data)
+                var (bangumiId, chTitle, chDesc, bangumiUrl) = await EnrichWithBangumiAsync(jpTitle, enTitle);
+
+                // Enrich with AniList (landscape) or TMDB
+                var landscapeUrl = "";
+                var anilistUrl = "";
+                var tmdbUrl = "";
+
+                var anilistData = await EnrichWithAniListAsync(jpTitle);
+                if (anilistData != null)
                 {
-                    Portrait = anime.Images?.Jpg?.LargeImageUrl ?? anime.Images?.Jpg?.ImageUrl ?? "",
-                    Landscape = ""
-                },
-                ExternalUrls = new ExternalUrlsDto
-                {
-                    Bangumi = "",
-                    Tmdb = "",
-                    Anilist = "",
-                    Mal = anime.Url
+                    landscapeUrl = anilistData.BannerImage ?? "";
+                    anilistUrl = anilistData.OriSiteUrl ?? "";
                 }
-            }).ToList();
 
-            _logger.LogInformation("Retrieved {Count} top anime from MAL", animeDtos.Count);
+                // If no landscape from AniList, try TMDB
+                if (string.IsNullOrEmpty(landscapeUrl))
+                {
+                    var (_, _, tmdbLandscape, tmdbUrlResult) = await EnrichWithTmdbAsync(jpTitle, null);
+                    landscapeUrl = tmdbLandscape;
+                    tmdbUrl = tmdbUrlResult;
+                }
 
+                animeDtos.Add(new AnimeInfoDto
+                {
+                    BangumiId = bangumiId,
+                    JpTitle = jpTitle,
+                    ChTitle = chTitle,
+                    EnTitle = enTitle,
+                    ChDesc = string.IsNullOrEmpty(chDesc) ? "无可用中文介绍" : chDesc,
+                    EnDesc = string.IsNullOrEmpty(enDesc) ? "No English description available" : enDesc,
+                    Score = anime.Score?.ToString("F1") ?? "0",
+                    Images = new AnimeImagesDto { Portrait = portraitUrl, Landscape = landscapeUrl },
+                    ExternalUrls = new ExternalUrlsDto
+                    {
+                        Bangumi = bangumiUrl,
+                        Tmdb = tmdbUrl,
+                        Anilist = anilistUrl,
+                        Mal = anime.Url ?? ""
+                    }
+                });
+            }
+
+            _logger.LogInformation("Retrieved {Count} top anime from MAL (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true,
-                DataSource = DataSource.Api,
-                IsStale = false,
-                Message = $"Top {animeDtos.Count} anime from MyAnimeList",
-                LastUpdated = DateTime.UtcNow,
-                Count = animeDtos.Count,
-                Animes = animeDtos,
-                RetryAttempts = 0
+                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Message = $"Top {animeDtos.Count} anime from MyAnimeList (enriched)",
+                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
+                Animes = animeDtos, RetryAttempts = 0
             };
         }
         catch (Exception ex)
@@ -599,17 +636,106 @@ public class AnimeAggregationService : IAnimeAggregationService
             _logger.LogError(ex, "Failed to fetch top anime from MAL");
             return new AnimeListResponse
             {
-                Success = false,
-                DataSource = DataSource.Api,
-                IsStale = true,
+                Success = false, DataSource = DataSource.Api, IsStale = true,
                 Message = $"Failed to fetch MAL top anime: {ex.Message}",
-                LastUpdated = null,
-                Count = 0,
-                Animes = new List<AnimeInfoDto>(),
-                RetryAttempts = 0
+                LastUpdated = null, Count = 0,
+                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
             };
         }
     }
+
+    #region Enrichment Helper Methods
+
+    /// <summary>
+    /// Enrich anime data with TMDB (English title, description, landscape image)
+    /// </summary>
+    private async Task<(string enTitle, string enDesc, string landscapeUrl, string tmdbUrl)> EnrichWithTmdbAsync(
+        string jpTitle, string? airDate)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(jpTitle)) return ("", "", "", "");
+
+            var tmdbInfo = await _tmdbClient.GetAnimeSummaryAndBackdropAsync(jpTitle, airDate);
+            if (tmdbInfo == null) return ("", "", "", "");
+
+            return (
+                tmdbInfo.EnglishTitle ?? "",
+                tmdbInfo.ChineseSummary ?? tmdbInfo.EnglishSummary ?? "",
+                tmdbInfo.BackdropUrl ?? "",
+                !string.IsNullOrEmpty(tmdbInfo.TMDBID) ? $"https://www.themoviedb.org/tv/{tmdbInfo.TMDBID}" : ""
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "TMDB enrichment failed for: {Title}", jpTitle);
+            return ("", "", "", "");
+        }
+    }
+
+    /// <summary>
+    /// Enrich anime data with AniList (banner image, English data)
+    /// </summary>
+    private async Task<AniListAnimeInfo?> EnrichWithAniListAsync(string jpTitle)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(jpTitle)) return null;
+            return await _aniListClient.GetAnimeInfoAsync(jpTitle);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "AniList enrichment failed for: {Title}", jpTitle);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Enrich anime data with Bangumi (Chinese title, description, Bangumi ID)
+    /// </summary>
+    private async Task<(string bangumiId, string chTitle, string chDesc, string bangumiUrl)> EnrichWithBangumiAsync(
+        string jpTitle, string enTitle)
+    {
+        try
+        {
+            // Try Japanese title first, then English title
+            var searchTitle = !string.IsNullOrWhiteSpace(jpTitle) ? jpTitle : enTitle;
+            if (string.IsNullOrWhiteSpace(searchTitle)) return ("", "", "", "");
+
+            var result = await _bangumiClient.SearchByTitleAsync(searchTitle);
+            if (result.ValueKind == JsonValueKind.Undefined) return ("", "", "", "");
+
+            var id = result.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+            var chTitle = result.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+            var chDesc = result.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
+
+            // If no summary in search result, fetch detail
+            if (string.IsNullOrEmpty(chDesc) && id > 0)
+            {
+                try
+                {
+                    var detail = await _bangumiClient.GetSubjectDetailAsync(id);
+                    chDesc = detail.TryGetProperty("summary", out var detailSummary)
+                        ? detailSummary.GetString() ?? "" : "";
+                }
+                catch { /* Ignore detail fetch errors */ }
+            }
+
+            return (
+                id > 0 ? id.ToString() : "",
+                chTitle,
+                chDesc,
+                id > 0 ? $"https://bgm.tv/subject/{id}" : ""
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Bangumi enrichment failed for: {Title}", jpTitle);
+            return ("", "", "", "");
+        }
+    }
+
+    #endregion
 
     private static string StripHtmlTags(string html)
     {
