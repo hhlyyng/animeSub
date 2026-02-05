@@ -4,6 +4,153 @@
 
 ---
 
+## 2026-02-05
+
+### Bangumi API Token 修复
+
+#### 问题描述
+
+前端调用 `/api/anime/top/bangumi` 端点时返回 401 错误：
+```
+Error: Failed to fetch Bangumi top anime: Response status code does not indicate success: 401 (Unauthorized)
+```
+
+#### 根因分析
+
+经 API 测试验证，Bangumi 的以下公开端点**不需要认证**：
+- `GET /calendar` - 每日放送
+- `GET /v0/subjects?type=2&sort=rank` - Top 排行
+- `GET /v0/subjects/{id}` - 条目详情
+
+原代码中 `EnsureTokenSet()` 在未设置 token 时抛出异常导致请求失败。
+
+#### 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `backend/Services/Implementations/BangumiClient.cs` | 移除 `EnsureTokenSet()` 调用，改用 `GET /v0/subjects` 端点 |
+| `backend/Services/Validators/TokenValidator.cs` | `ValidateBangumiToken` 改为可选验证 |
+| `backend/Services/Interfaces/IAnimeAggregationService.cs` | `bangumiToken` 参数改为可选 |
+| `backend/Services/Implementations/AnimeAggregationService.cs` | `bangumiToken` 参数改为可选 |
+| `backend/Controllers/AnimeController.cs` | 简化 Bangumi Top 10 端点，移除 token 验证 |
+| `backend.Tests/Unit/Services/AnimeAggregationServiceTests.cs` | 更新测试适配可选 token |
+
+#### 行为变化
+
+| 项目 | 修改前 | 修改后 |
+|------|--------|--------|
+| Bangumi Token | 必填，缺少返回 401/400 | 可选，直接使用公开 API |
+| API 端点 | `POST /v0/search/subjects` | `GET /v0/subjects?type=2&sort=rank` |
+
+#### Git 提交
+
+```
+86370c5 fix(backend): make Bangumi token optional for public API
+```
+
+---
+
+### 数据库 Schema 文档
+
+#### 概述
+
+系统使用 SQLite 数据库持久化存储动画数据和订阅信息。重启后端不会丢失数据。
+
+#### 数据流
+
+```
+请求 /api/anime/today
+    ↓
+1. 查询数据库 (GetAnimesByWeekdayAsync)
+    ↓
+2. 有预取数据? → 返回数据库数据 ✅
+    ↓ (无)
+3. 调用外部 API → 返回实时数据
+```
+
+#### 表结构
+
+##### AnimeInfo - 聚合动画信息
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| BangumiId (PK) | INT | Bangumi ID |
+| NameJapanese | VARCHAR | 日文标题 |
+| NameChinese | VARCHAR | 中文标题 |
+| NameEnglish | VARCHAR | 英文标题 (TMDB/AniList) |
+| DescChinese | TEXT | 中文简介 |
+| DescEnglish | TEXT | 英文简介 |
+| Score | VARCHAR | 评分 (如 "8.5") |
+| ImagePortrait | VARCHAR | 竖版海报 (Bangumi) |
+| ImageLandscape | VARCHAR | 横版背景 (TMDB) |
+| TmdbId | INT? | TMDB ID |
+| AnilistId | INT? | AniList ID |
+| UrlBangumi | VARCHAR | Bangumi 链接 |
+| UrlTmdb | VARCHAR | TMDB 链接 |
+| UrlAnilist | VARCHAR | AniList 链接 |
+| AirDate | VARCHAR | 放送日期 (YYYY-MM-DD) |
+| Weekday | INT | 星期 (1-7, 周一-周日) |
+| CreatedAt | DATETIME | 创建时间 |
+| UpdatedAt | DATETIME | 更新时间 |
+| IsPreFetched | BOOL | 是否预取完成 |
+
+##### AnimeImages - 图片缓存
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| BangumiId (PK) | INT | Bangumi ID |
+| PosterUrl | VARCHAR | 海报 URL |
+| BackdropUrl | VARCHAR | 背景图 URL |
+| TmdbId | INT? | TMDB ID |
+| AniListId | INT? | AniList ID |
+| CreatedAt | DATETIME | 创建时间 |
+| UpdatedAt | DATETIME | 更新时间 |
+
+##### Subscriptions - 订阅配置
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Id (PK) | INT AUTO | 订阅 ID |
+| BangumiId | INT | Bangumi ID |
+| Title | VARCHAR | 动画标题 |
+| MikanBangumiId | VARCHAR | Mikan 番剧 ID |
+| SubgroupId | VARCHAR? | 字幕组 ID |
+| SubgroupName | VARCHAR? | 字幕组名称 |
+| KeywordInclude | VARCHAR? | 包含关键词 (逗号分隔) |
+| KeywordExclude | VARCHAR? | 排除关键词 (逗号分隔) |
+| IsEnabled | BOOL | 是否启用 |
+| LastCheckedAt | DATETIME? | 最后检查时间 |
+| LastDownloadAt | DATETIME? | 最后下载时间 |
+| DownloadCount | INT | 下载计数 |
+| CreatedAt | DATETIME | 创建时间 |
+| UpdatedAt | DATETIME | 更新时间 |
+
+##### DownloadHistory - 下载历史
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Id (PK) | INT AUTO | 记录 ID |
+| SubscriptionId (FK) | INT | 订阅 ID → Subscriptions.Id |
+| TorrentUrl | VARCHAR | 种子 URL |
+| TorrentHash | VARCHAR | 种子 Hash (去重用) |
+| Title | VARCHAR | 资源标题 |
+| FileSize | BIGINT? | 文件大小 (bytes) |
+| Status | INT | 状态 (0=待下载, 1=下载中, 2=完成, 3=失败, 4=跳过) |
+| ErrorMessage | VARCHAR? | 错误信息 |
+| PublishedAt | DATETIME | RSS 发布时间 |
+| DiscoveredAt | DATETIME | 发现时间 |
+| DownloadedAt | DATETIME? | 下载时间 |
+
+##### DailyScheduleCache - 每日放送缓存
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| Date (PK) | VARCHAR | 日期 (yyyy-MM-dd) |
+| BangumiIdsJson | TEXT | Bangumi ID 数组 (JSON) |
+| CreatedAt | DATETIME | 创建时间 |
+
+---
+
 ## 2026-02-04
 
 ### Top 10 AnimeFlow 功能
