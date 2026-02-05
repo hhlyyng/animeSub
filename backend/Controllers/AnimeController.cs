@@ -37,7 +37,7 @@ public class AnimeController : ControllerBase
     /// Sample request:
     ///
     ///     GET /api/anime/today
-    ///     X-Bangumi-Token: your_bangumi_token (optional if configured)
+    ///     X-Bangumi-Token: your_bangumi_token (optional, public API)
     ///     X-TMDB-Token: your_tmdb_token (optional)
     ///
     /// </remarks>
@@ -103,7 +103,7 @@ public class AnimeController : ControllerBase
     }
 
     /// <summary>
-    /// Get top 10 anime from Bangumi rankings
+    /// Get top 10 anime from Bangumi rankings (public API, no auth required)
     /// </summary>
     [HttpGet("top/bangumi")]
     [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
@@ -111,13 +111,9 @@ public class AnimeController : ControllerBase
     {
         _logger.LogInformation("Received request for Bangumi Top 10");
 
-        var bangumiToken = await _tokenStorage.GetBangumiTokenAsync()
-            ?? Request.Headers["X-Bangumi-Token"].FirstOrDefault();
-
-        var (validatedBangumiToken, _) = _tokenValidator.ValidateRequestTokens(bangumiToken, null);
-
+        // Bangumi public API doesn't require authentication
         var response = await _aggregationService.GetTopAnimeFromBangumiAsync(
-            validatedBangumiToken, 10, cancellationToken);
+            null, 10, cancellationToken);
 
         return Ok(new
         {

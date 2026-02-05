@@ -15,20 +15,19 @@ public class TokenValidator
     }
 
     /// <summary>
-    /// Validate Bangumi token (required, OAuth 2.0 Bearer token)
-    /// According to Bangumi API documentation, tokens are typically 32+ characters
+    /// Validate Bangumi token (optional, Bangumi public API doesn't require authentication)
+    /// If provided, it will be validated for format
     /// </summary>
     public void ValidateBangumiToken(string? token)
     {
+        // Bangumi public API doesn't require authentication
         if (string.IsNullOrWhiteSpace(token))
         {
-            _logger.LogWarning("Bangumi token validation failed: token is missing");
-            throw new InvalidCredentialsException(
-                "BangumiToken",
-                "Bangumi token is required. Please configure it in settings or provide X-Bangumi-Token header.");
+            _logger.LogDebug("Bangumi token not provided (optional, public API will be used)");
+            return;
         }
 
-        // Bangumi OAuth 2.0 tokens are typically 20+ characters
+        // If token is provided, validate format (OAuth 2.0 tokens are typically 20+ characters)
         if (token.Length < 20)
         {
             _logger.LogWarning("Bangumi token validation failed: token too short (length: {Length})", token.Length);
@@ -68,13 +67,13 @@ public class TokenValidator
     /// <summary>
     /// Validate all request tokens
     /// </summary>
-    public (string bangumiToken, string? tmdbToken) ValidateRequestTokens(
+    public (string? bangumiToken, string? tmdbToken) ValidateRequestTokens(
         string? bangumiToken,
         string? tmdbToken)
     {
         ValidateBangumiToken(bangumiToken);
         ValidateTmdbToken(tmdbToken);
 
-        return (bangumiToken!, tmdbToken);
+        return (bangumiToken, tmdbToken);
     }
 }

@@ -44,15 +44,14 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     public async Task<AnimeListResponse> GetTodayAnimeEnrichedAsync(
-        string bangumiToken,
+        string? bangumiToken = null,
         string? tmdbToken = null,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(bangumiToken))
-            throw new ArgumentException("Bangumi token is required", nameof(bangumiToken));
-
-        // Set tokens on clients
-        _bangumiClient.SetToken(bangumiToken);
+        // Bangumi public API doesn't require authentication
+        // Set tokens on clients (if provided)
+        if (!string.IsNullOrWhiteSpace(bangumiToken))
+            _bangumiClient.SetToken(bangumiToken);
         _tmdbClient.SetToken(tmdbToken);
 
         _logger.LogInformation("Starting anime aggregation for today's schedule");
@@ -292,7 +291,7 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     private async Task<AnimeListResponse> FetchAllFromApiAsync(
-        string bangumiToken,
+        string? bangumiToken,
         string? tmdbToken,
         int weekday,
         CancellationToken cancellationToken)
@@ -391,14 +390,13 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     public async Task<AnimeListResponse> GetTopAnimeFromBangumiAsync(
-        string bangumiToken,
+        string? bangumiToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(bangumiToken))
-            throw new ArgumentException("Bangumi token is required", nameof(bangumiToken));
-
-        _bangumiClient.SetToken(bangumiToken);
+        // Bangumi public API doesn't require authentication
+        if (!string.IsNullOrWhiteSpace(bangumiToken))
+            _bangumiClient.SetToken(bangumiToken);
         _logger.LogInformation("Fetching top {Limit} anime from Bangumi", limit);
 
         try

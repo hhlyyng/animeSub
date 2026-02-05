@@ -11,23 +11,23 @@ public interface IAnimeAggregationService
     /// Get today's anime with enriched data from multiple sources
     /// Returns response with data source indicator for frontend
     /// </summary>
-    /// <param name="bangumiToken">Bangumi API token (required)</param>
+    /// <param name="bangumiToken">Bangumi API token (optional, public API doesn't require auth)</param>
     /// <param name="tmdbToken">TMDB API token (optional)</param>
     /// <param name="cancellationToken">Cancellation token</param>
     /// <returns>Response with anime list and metadata (data source, staleness, etc.)</returns>
     Task<AnimeListResponse> GetTodayAnimeEnrichedAsync(
-        string bangumiToken,
+        string? bangumiToken = null,
         string? tmdbToken = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get top anime from Bangumi rankings
     /// </summary>
-    /// <param name="bangumiToken">Bangumi API token</param>
+    /// <param name="bangumiToken">Bangumi API token (optional, public API doesn't require auth)</param>
     /// <param name="limit">Number of anime to retrieve</param>
     /// <param name="cancellationToken">Cancellation token</param>
     Task<AnimeListResponse> GetTopAnimeFromBangumiAsync(
-        string bangumiToken,
+        string? bangumiToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default);
 

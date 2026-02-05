@@ -211,11 +211,27 @@ public class AnimeAggregationServiceTests
     #region Token and Validation Tests
 
     [Fact]
-    public async Task GetTodayAnimeEnrichedAsync_ThrowsOnMissingToken()
+    public async Task GetTodayAnimeEnrichedAsync_WorksWithoutToken()
     {
-        // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => _sut.GetTodayAnimeEnrichedAsync(""));
+        // Arrange - Bangumi public API doesn't require authentication
+        var preFetchedEntities = CreateAnimeInfoEntities(1);
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(preFetchedEntities);
+
+        _resilienceServiceMock
+            .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
+                It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
+
+        // Act - should not throw even with null token
+        var result = await _sut.GetTodayAnimeEnrichedAsync(null, null);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.True(result.Success);
     }
 
     [Fact]
