@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using backend.Models;
 using backend.Models.Configuration;
 using backend.Services.Interfaces;
+using backend.Services.Utilities;
 
 namespace backend.Services.Implementations
 {
@@ -49,103 +50,117 @@ namespace backend.Services.Implementations
                 }
 
                 // Extract year from airDate (format: YYYY-MM-DD)
-                int? year = null;
-                if (!string.IsNullOrEmpty(airDate) && airDate.Length >= 4)
+                int? year = ExtractYear(airDate);
+
+                // Clean title (remove season suffix)
+                var (cleanedTitle, wasCleaned) = TitleCleaner.RemoveSeasonSuffix(title);
+
+                // Three-layer fallback search strategy:
+                // 1. Original title + year filter
+                // 2. Cleaned title + year filter (if title was cleaned)
+                // 3. Cleaned/original title without year filter
+
+                // Layer 1: Original title + year
+                var searchResult = await SearchTMDBAsync(title, year);
+
+                // Layer 2: Cleaned title + year (only if title was cleaned)
+                if (searchResult == null && wasCleaned)
                 {
-                    if (int.TryParse(airDate.Substring(0, 4), out var y))
-                        year = y;
+                    Logger.LogInformation("No results for '{OriginalTitle}', trying cleaned title '{CleanedTitle}'",
+                        title, cleanedTitle);
+                    searchResult = await SearchTMDBAsync(cleanedTitle, year);
                 }
 
-                const string language = "en-US";
-                var url = $"search/tv?query={Uri.EscapeDataString(title)}&language={language}&page=1&include_adult=false";
-
-                // Add year filter if available
-                if (year.HasValue)
+                // Layer 3: Without year filter (use cleaned title if available)
+                if (searchResult == null && year.HasValue)
                 {
-                    url += $"&first_air_date_year={year}";
-                    Logger.LogInformation("Searching TMDB with year filter: {Year}", year);
+                    var titleToSearch = wasCleaned ? cleanedTitle : title;
+                    Logger.LogInformation("No results with year filter, trying '{Title}' without year filter",
+                        titleToSearch);
+                    searchResult = await SearchTMDBAsync(titleToSearch, null);
                 }
 
-                using var resp = await HttpClient.GetAsync(url);
-                resp.EnsureSuccessStatusCode();
-
-                using var stream = await resp.Content.ReadAsStreamAsync();
-                using var doc = await JsonDocument.ParseAsync(stream);
-
-                if (!doc.RootElement.TryGetProperty("results", out var results) || results.GetArrayLength() == 0)
+                // No results found after all attempts
+                if (searchResult == null)
                 {
                     Logger.LogInformation("No TMDB results found for title: {Title}", title);
                     return new TMDBAnimeInfo { EnglishSummary = "No result found in TMDB.", BackdropUrl = "" };
                 }
 
-                // Prioritize anime results: prefer Animation genre (16) + Japanese origin
-                JsonElement? bestMatch = null;
+                var first = searchResult.Value;
 
-                foreach (var item in results.EnumerateArray())
-                {
-                    bool isAnimation = false;
-                    bool isJapanese = false;
+                // Detect if this is a movie or TV show
+                // Movies have "title" and "release_date", TV shows have "name" and "first_air_date"
+                bool isMovie = first.TryGetProperty("title", out _);
+                string mediaType = isMovie ? "movie" : "tv";
 
-                    // Check genre_ids for Animation (16)
-                    if (item.TryGetProperty("genre_ids", out var genres) && genres.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var genre in genres.EnumerateArray())
-                        {
-                            if (genre.TryGetInt32(out var genreId) && genreId == 16)
-                            {
-                                isAnimation = true;
-                                break;
-                            }
-                        }
-                    }
+                int mediaId = first.TryGetProperty("id", out var idEl) && idEl.TryGetInt32(out var idVal) ? idVal : 0;
 
-                    // Check origin_country for JP
-                    if (item.TryGetProperty("origin_country", out var countries) && countries.ValueKind == JsonValueKind.Array)
-                    {
-                        foreach (var country in countries.EnumerateArray())
-                        {
-                            if (country.GetString() == "JP")
-                            {
-                                isJapanese = true;
-                                break;
-                            }
-                        }
-                    }
+                // Movies use "title", TV shows use "name"
+                string? enTitleFromSearch = isMovie
+                    ? (first.TryGetProperty("title", out var titleEl) ? titleEl.GetString() : null)
+                    : (first.TryGetProperty("name", out var nm) ? nm.GetString() : null);
 
-                    // Perfect match: Animation + Japanese
-                    if (isAnimation && isJapanese)
-                    {
-                        bestMatch = item;
-                        Logger.LogInformation("Found Japanese anime match for '{Title}'", title);
-                        break;
-                    }
-
-                    // Second priority: Animation (any origin)
-                    if (isAnimation && bestMatch == null)
-                    {
-                        bestMatch = item;
-                    }
-                }
-
-                // Fallback to first result if no anime found
-                var first = bestMatch ?? results[0];
-                if (bestMatch == null)
-                {
-                    Logger.LogInformation("No anime match found for '{Title}', using first result", title);
-                }
-
-                int tvId = first.TryGetProperty("id", out var idEl) && idEl.TryGetInt32(out var idVal) ? idVal : 0;
-                string? enTitleFromSearch = first.TryGetProperty("name", out var nm) ? nm.GetString() : null;
                 string enOverviewFromSearch = first.TryGetProperty("overview", out var ov)
                     ? (ov.GetString() ?? "No English summary available.")
                     : "No English summary available.";
 
                 string backdropUrl = "";
-                if (first.TryGetProperty("backdrop_path", out var bp) && bp.ValueKind == JsonValueKind.String)
+                if (first.TryGetProperty("backdrop_path", out var bp))
                 {
-                    string? path = bp.GetString();
-                    if (!string.IsNullOrWhiteSpace(path))
-                        backdropUrl = $"{_imageBaseUrl}original{path}";
+                    if (bp.ValueKind == JsonValueKind.String)
+                    {
+                        string? path = bp.GetString();
+                        if (!string.IsNullOrWhiteSpace(path))
+                        {
+                            backdropUrl = $"{_imageBaseUrl}original{path}";
+                            Logger.LogInformation("Found backdrop for '{Title}': {BackdropPath}", title, path);
+                        }
+                        else
+                        {
+                            Logger.LogWarning("Backdrop path is empty for '{Title}'", title);
+                        }
+                    }
+                    else if (bp.ValueKind == JsonValueKind.Null)
+                    {
+                        Logger.LogWarning("Backdrop path is null in search results for '{Title}' (ID: {MediaId})", title, mediaId);
+                    }
+                }
+                else
+                {
+                    Logger.LogWarning("No backdrop_path property in search results for '{Title}'", title);
+                }
+
+                // Fallback: If no backdrop in search results, try fetching from details endpoint
+                if (string.IsNullOrEmpty(backdropUrl) && mediaId > 0)
+                {
+                    try
+                    {
+                        var detailsUrl = $"{mediaType}/{mediaId}";
+                        Logger.LogInformation("Fetching {MediaType} details for backdrop: {Url}", mediaType, detailsUrl);
+
+                        using var detailsResp = await HttpClient.GetAsync(detailsUrl);
+                        if (detailsResp.IsSuccessStatusCode)
+                        {
+                            using var detailsStream = await detailsResp.Content.ReadAsStreamAsync();
+                            using var detailsDoc = await JsonDocument.ParseAsync(detailsStream);
+
+                            if (detailsDoc.RootElement.TryGetProperty("backdrop_path", out var detailsBp) &&
+                                detailsBp.ValueKind == JsonValueKind.String)
+                            {
+                                string? detailsPath = detailsBp.GetString();
+                                if (!string.IsNullOrWhiteSpace(detailsPath))
+                                {
+                                    backdropUrl = $"{_imageBaseUrl}original{detailsPath}";
+                                    Logger.LogInformation("Found backdrop from details for '{Title}': {BackdropPath}", title, detailsPath);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "Failed to fetch {MediaType} details for backdrop (ID: {MediaId})", mediaType, mediaId);
+                    }
                 }
 
                 string enTitle = enTitleFromSearch ?? "";
@@ -153,10 +168,10 @@ namespace backend.Services.Implementations
                 string enOverview = enOverviewFromSearch;
                 string zhOverview = "";
 
-                // Fetch translations
-                if (tvId > 0)
+                // Fetch translations (use appropriate endpoint for movie vs TV)
+                if (mediaId > 0)
                 {
-                    var tUrl = $"tv/{tvId}/translations";
+                    var tUrl = $"{mediaType}/{mediaId}/translations";
                     using var tResp = await HttpClient.GetAsync(tUrl);
                     tResp.EnsureSuccessStatusCode();
 
@@ -190,10 +205,13 @@ namespace backend.Services.Implementations
                             }
                         }
 
+                        // Movies use "title" in translations, TV shows use "name"
+                        var titleKey = isMovie ? "title" : "name";
+
                         if (en.ValueKind != JsonValueKind.Undefined &&
                             en.TryGetProperty("data", out var enData) && enData.ValueKind == JsonValueKind.Object)
                         {
-                            if (enData.TryGetProperty("name", out var enNameEl))
+                            if (enData.TryGetProperty(titleKey, out var enNameEl))
                                 enTitle = enNameEl.GetString() ?? enTitle;
                             if (enData.TryGetProperty("overview", out var enOvEl))
                                 enOverview = enOvEl.GetString() ?? enOverview;
@@ -201,19 +219,19 @@ namespace backend.Services.Implementations
 
                         if (hasZh && zh.TryGetProperty("data", out var zhData) && zhData.ValueKind == JsonValueKind.Object)
                         {
-                            if (zhData.TryGetProperty("name", out var zhNameEl))
+                            if (zhData.TryGetProperty(titleKey, out var zhNameEl))
                                 zhTitle = zhNameEl.GetString() ?? zhTitle;
                             if (zhData.TryGetProperty("overview", out var zhOvEl))
                                 zhOverview = zhOvEl.GetString() ?? zhOverview;
                         }
                     }
 
-                    // Try to get season-specific backdrop for multi-season anime
-                    if (year.HasValue)
+                    // Try to get season-specific backdrop for multi-season anime (TV only, not movies)
+                    if (!isMovie && year.HasValue)
                     {
                         try
                         {
-                            var detailUrl = $"tv/{tvId}";
+                            var detailUrl = $"tv/{mediaId}";
                             using var detailResp = await HttpClient.GetAsync(detailUrl);
 
                             if (detailResp.IsSuccessStatusCode)
@@ -243,7 +261,7 @@ namespace backend.Services.Implementations
                                                 continue;
 
                                             // Try to get season-specific images
-                                            var seasonImgUrl = $"tv/{tvId}/season/{seasonNumber}/images";
+                                            var seasonImgUrl = $"tv/{mediaId}/season/{seasonNumber}/images";
                                             using var seasonImgResp = await HttpClient.GetAsync(seasonImgUrl);
 
                                             if (seasonImgResp.IsSuccessStatusCode)
@@ -280,22 +298,22 @@ namespace backend.Services.Implementations
                         }
                         catch (Exception ex)
                         {
-                            Logger.LogWarning(ex, "Failed to fetch season details for TV ID {TvId}", tvId);
+                            Logger.LogWarning(ex, "Failed to fetch season details for TV ID {MediaId}", mediaId);
                         }
                     }
                 }
 
-                Logger.LogInformation("Found TMDB info for '{Title}' (ID: {TvId})", title, tvId);
+                Logger.LogInformation("Found TMDB {MediaType} info for '{Title}' (ID: {MediaId})", mediaType, title, mediaId);
 
                 return new TMDBAnimeInfo
                 {
-                    TMDBID = tvId.ToString(),
+                    TMDBID = mediaId.ToString(),
                     EnglishTitle = enTitle,
                     ChineseTitle = zhTitle,
                     EnglishSummary = string.IsNullOrWhiteSpace(enOverview) ? "No English summary available." : enOverview,
                     ChineseSummary = zhOverview ?? "",
                     BackdropUrl = backdropUrl,
-                    OriSiteUrl = tvId > 0 ? $"https://www.themoviedb.org/tv/{tvId}" : ""
+                    OriSiteUrl = mediaId > 0 ? $"https://www.themoviedb.org/{mediaType}/{mediaId}" : ""
                 };
             }, "GetAnimeSummaryAndBackdrop", new Dictionary<string, object> { ["Title"] = title });
 
@@ -366,5 +384,149 @@ namespace backend.Services.Implementations
 
                 return profileUrls;
             }, "GetPersonImages", new Dictionary<string, object> { ["PersonId"] = personId });
+
+        #region Private Helper Methods
+
+        /// <summary>
+        /// Extracts year from airDate string (format: YYYY-MM-DD)
+        /// </summary>
+        private static int? ExtractYear(string? airDate)
+        {
+            if (!string.IsNullOrEmpty(airDate) && airDate.Length >= 4)
+            {
+                if (int.TryParse(airDate.Substring(0, 4), out var year))
+                    return year;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Executes a TMDB search and returns the best anime match as a cloned JsonElement.
+        /// First searches TV shows, then falls back to movies if no results found.
+        /// </summary>
+        private async Task<JsonElement?> SearchTMDBAsync(string query, int? year)
+        {
+            // First try TV search
+            var result = await SearchTMDBByTypeAsync(query, year, "tv");
+            if (result != null)
+                return result;
+
+            // Fallback to movie search (for theatrical anime films)
+            Logger.LogInformation("No TV results for '{Query}', trying movie search", query);
+            return await SearchTMDBByTypeAsync(query, year, "movie");
+        }
+
+        /// <summary>
+        /// Executes a TMDB search for a specific media type (tv or movie)
+        /// </summary>
+        private async Task<JsonElement?> SearchTMDBByTypeAsync(string query, int? year, string mediaType)
+        {
+            const string language = "en-US";
+            var url = $"search/{mediaType}?query={Uri.EscapeDataString(query)}&language={language}&page=1&include_adult=false";
+
+            if (year.HasValue)
+            {
+                // TV uses first_air_date_year, movies use primary_release_year
+                var yearParam = mediaType == "tv" ? "first_air_date_year" : "primary_release_year";
+                url += $"&{yearParam}={year}";
+                Logger.LogInformation("Searching TMDB {MediaType} for '{Query}' with year filter: {Year}", mediaType, query, year);
+            }
+            else
+            {
+                Logger.LogInformation("Searching TMDB {MediaType} for '{Query}' without year filter", mediaType, query);
+            }
+
+            Logger.LogDebug("TMDB search URL: {Url}", url);
+
+            using var resp = await HttpClient.GetAsync(url);
+            resp.EnsureSuccessStatusCode();
+
+            using var stream = await resp.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(stream);
+
+            if (!doc.RootElement.TryGetProperty("results", out var results) || results.GetArrayLength() == 0)
+            {
+                Logger.LogInformation("TMDB {MediaType} search returned 0 results for query: '{Query}'", mediaType, query);
+                return null;
+            }
+
+            Logger.LogInformation("TMDB {MediaType} search returned {Count} results for query: '{Query}'", mediaType, results.GetArrayLength(), query);
+
+            var bestMatch = FindBestAnimeMatch(results, query);
+
+            // Clone the JsonElement to avoid reference to disposed JsonDocument
+            if (bestMatch.HasValue)
+            {
+                return JsonSerializer.Deserialize<JsonElement>(bestMatch.Value.GetRawText());
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Finds the best anime match from search results.
+        /// Priority: Animation+JP > Animation > First result
+        /// </summary>
+        private JsonElement? FindBestAnimeMatch(JsonElement results, string title)
+        {
+            JsonElement? bestMatch = null;
+
+            foreach (var item in results.EnumerateArray())
+            {
+                bool isAnimation = false;
+                bool isJapanese = false;
+
+                // Check genre_ids for Animation (16)
+                if (item.TryGetProperty("genre_ids", out var genres) && genres.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var genre in genres.EnumerateArray())
+                    {
+                        if (genre.TryGetInt32(out var genreId) && genreId == 16)
+                        {
+                            isAnimation = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Check origin_country for JP
+                if (item.TryGetProperty("origin_country", out var countries) && countries.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var country in countries.EnumerateArray())
+                    {
+                        if (country.GetString() == "JP")
+                        {
+                            isJapanese = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Perfect match: Animation + Japanese
+                if (isAnimation && isJapanese)
+                {
+                    bestMatch = item;
+                    Logger.LogInformation("Found Japanese anime match for '{Title}'", title);
+                    break;
+                }
+
+                // Second priority: Animation (any origin)
+                if (isAnimation && bestMatch == null)
+                {
+                    bestMatch = item;
+                }
+            }
+
+            // Fallback to first result if no anime found
+            if (bestMatch == null)
+            {
+                Logger.LogInformation("No anime match found for '{Title}', using first result", title);
+                return results[0];
+            }
+
+            return bestMatch;
+        }
+
+        #endregion
     }
 }

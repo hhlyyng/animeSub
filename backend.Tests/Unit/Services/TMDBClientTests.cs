@@ -66,7 +66,11 @@ public class TMDBClientTests
                         };
                     }
                 }
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
+                // Return empty response for unmatched URLs to avoid EnsureSuccessStatusCode throwing
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json")
+                };
             });
     }
 
@@ -305,6 +309,289 @@ public class TMDBClientTests
 
         // Assert
         result.Should().BeNull();
+    }
+
+    #endregion
+
+    #region Fallback Strategy Tests
+
+    [Fact]
+    public async Task GetAnimeSummaryAndBackdropAsync_OriginalTitleSucceeds_OnlyOneApiCall()
+    {
+        // Arrange: Original title returns results
+        int apiCallCount = 0;
+        _httpHandlerMock
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
+            {
+                var url = request.RequestUri?.ToString() ?? "";
+                if (url.Contains("search/tv"))
+                {
+                    apiCallCount++;
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(CreateSearchResponse(new[]
+                        {
+                            new SearchResult { Id = 1, Name = "Test", GenreIds = new[] { 16 }, OriginCountry = new[] { "JP" } }
+                        }), Encoding.UTF8, "application/json")
+                    };
+                }
+                if (url.Contains("translations"))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(CreateTranslationsResponse(), Encoding.UTF8, "application/json")
+                    };
+                }
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            });
+
+        var sut = CreateClient();
+        sut.SetToken("test-token");
+
+        // Act
+        var result = await sut.GetAnimeSummaryAndBackdropAsync("魔都精兵的奴隶 第二季", "2024-01-01");
+
+        // Assert
+        result.Should().NotBeNull();
+        apiCallCount.Should().Be(1); // Only one search API call
+    }
+
+    [Fact]
+    public async Task GetAnimeSummaryAndBackdropAsync_CleanedTitleSucceeds_TwoApiCalls()
+    {
+        // Arrange: Original title fails, cleaned title succeeds
+        int apiCallCount = 0;
+        _httpHandlerMock
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
+            {
+                var url = request.RequestUri?.ToString() ?? "";
+                if (url.Contains("search/tv"))
+                {
+                    apiCallCount++;
+                    // First call with season suffix fails, second with cleaned title succeeds
+                    // Note: URL may be decoded when retrieved as string, so check for raw Chinese characters
+                    if (url.Contains("第二季") || url.Contains("%E7%AC%AC%E4%BA%8C%E5%AD%A3"))
+                    {
+                        return new HttpResponseMessage(HttpStatusCode.OK)
+                        {
+                            Content = new StringContent(JsonSerializer.Serialize(new { results = Array.Empty<object>() }), Encoding.UTF8, "application/json")
+                        };
+                    }
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(CreateSearchResponse(new[]
+                        {
+                            new SearchResult { Id = 1, Name = "Test", GenreIds = new[] { 16 }, OriginCountry = new[] { "JP" } }
+                        }), Encoding.UTF8, "application/json")
+                    };
+                }
+                if (url.Contains("translations"))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(CreateTranslationsResponse(), Encoding.UTF8, "application/json")
+                    };
+                }
+                // Return empty JSON for other URLs to avoid EnsureSuccessStatusCode throwing
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json")
+                };
+            });
+
+        var sut = CreateClient();
+        sut.SetToken("test-token");
+
+        // Act
+        var result = await sut.GetAnimeSummaryAndBackdropAsync("魔都精兵的奴隶 第二季", "2024-01-01");
+
+        // Assert
+        result.Should().NotBeNull();
+        apiCallCount.Should().Be(2); // Two search API calls
+    }
+
+    [Fact]
+    public async Task GetAnimeSummaryAndBackdropAsync_NoYearFilterSucceeds_ThreeApiCalls()
+    {
+        // Arrange: Both year-filtered queries fail, no-year query succeeds
+        int apiCallCount = 0;
+        _httpHandlerMock
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
+            {
+                var url = request.RequestUri?.ToString() ?? "";
+                if (url.Contains("search/tv"))
+                {
+                    apiCallCount++;
+                    // Queries with year filter fail
+                    if (url.Contains("first_air_date_year"))
+                    {
+                        return new HttpResponseMessage(HttpStatusCode.OK)
+                        {
+                            Content = new StringContent(JsonSerializer.Serialize(new { results = Array.Empty<object>() }), Encoding.UTF8, "application/json")
+                        };
+                    }
+                    // Query without year filter succeeds
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(CreateSearchResponse(new[]
+                        {
+                            new SearchResult { Id = 1, Name = "Test", GenreIds = new[] { 16 }, OriginCountry = new[] { "JP" } }
+                        }), Encoding.UTF8, "application/json")
+                    };
+                }
+                if (url.Contains("translations"))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(CreateTranslationsResponse(), Encoding.UTF8, "application/json")
+                    };
+                }
+                // Return empty JSON for other URLs to avoid EnsureSuccessStatusCode throwing
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json")
+                };
+            });
+
+        var sut = CreateClient();
+        sut.SetToken("test-token");
+
+        // Act
+        var result = await sut.GetAnimeSummaryAndBackdropAsync("魔都精兵的奴隶 第二季", "2024-01-01");
+
+        // Assert
+        result.Should().NotBeNull();
+        apiCallCount.Should().Be(3); // Three search API calls
+    }
+
+    [Fact]
+    public async Task GetAnimeSummaryAndBackdropAsync_TitleWithoutSeason_SkipsCleanedTitleFallback()
+    {
+        // Arrange: Title has no season suffix, should skip layer 2
+        int apiCallCount = 0;
+        List<string> searchQueries = new();
+
+        _httpHandlerMock
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
+            {
+                var url = request.RequestUri?.ToString() ?? "";
+                if (url.Contains("search/tv"))
+                {
+                    apiCallCount++;
+                    searchQueries.Add(url);
+                    // First call with year filter fails
+                    if (url.Contains("first_air_date_year"))
+                    {
+                        return new HttpResponseMessage(HttpStatusCode.OK)
+                        {
+                            Content = new StringContent(JsonSerializer.Serialize(new { results = Array.Empty<object>() }), Encoding.UTF8, "application/json")
+                        };
+                    }
+                    // Call without year filter succeeds
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(CreateSearchResponse(new[]
+                        {
+                            new SearchResult { Id = 1, Name = "Test", GenreIds = new[] { 16 }, OriginCountry = new[] { "JP" } }
+                        }), Encoding.UTF8, "application/json")
+                    };
+                }
+                if (url.Contains("translations"))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(CreateTranslationsResponse(), Encoding.UTF8, "application/json")
+                    };
+                }
+                // Return empty JSON for other URLs to avoid EnsureSuccessStatusCode throwing
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json")
+                };
+            });
+
+        var sut = CreateClient();
+        sut.SetToken("test-token");
+
+        // Act
+        var result = await sut.GetAnimeSummaryAndBackdropAsync("葬送のフリーレン", "2024-01-01");
+
+        // Assert
+        result.Should().NotBeNull();
+        apiCallCount.Should().Be(2); // Original + no-year (skips cleaned title since no season suffix)
+    }
+
+    [Fact]
+    public async Task GetAnimeSummaryAndBackdropAsync_NoAirDate_SkipsYearFallback()
+    {
+        // Arrange: No air date provided, should not have year fallback
+        int tvSearchCount = 0;
+        int movieSearchCount = 0;
+
+        _httpHandlerMock
+            .Protected()
+            .Setup<Task<HttpResponseMessage>>(
+                "SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync((HttpRequestMessage request, CancellationToken _) =>
+            {
+                var url = request.RequestUri?.ToString() ?? "";
+                if (url.Contains("search/tv"))
+                {
+                    tvSearchCount++;
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(JsonSerializer.Serialize(new { results = Array.Empty<object>() }), Encoding.UTF8, "application/json")
+                    };
+                }
+                if (url.Contains("search/movie"))
+                {
+                    movieSearchCount++;
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(JsonSerializer.Serialize(new { results = Array.Empty<object>() }), Encoding.UTF8, "application/json")
+                    };
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json")
+                };
+            });
+
+        var sut = CreateClient();
+        sut.SetToken("test-token");
+
+        // Act - No airDate provided
+        var result = await sut.GetAnimeSummaryAndBackdropAsync("魔都精兵的奴隶 第二季");
+
+        // Assert
+        result.Should().NotBeNull();
+        result!.EnglishSummary.Should().Be("No result found in TMDB.");
+        // TV searches: original + cleaned (2 calls, no year fallback since no year was provided)
+        // Movie searches: original + cleaned (2 calls as fallback when TV returns nothing)
+        tvSearchCount.Should().Be(2);
+        movieSearchCount.Should().Be(2);
     }
 
     #endregion
