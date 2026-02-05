@@ -12,12 +12,13 @@ type AnimeDetailModalProps = {
 export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps) {
   const language = useAppStore((state) => state.language);
 
-  // 根据语言选择标题和描述
+  // 根据语言选择标题和描述，fallback to jp_title if both ch/en are empty
   const primaryTitle = language === 'zh'
-    ? (anime.ch_title || anime.en_title)
-    : (anime.en_title || anime.ch_title);
+    ? (anime.ch_title || anime.en_title || anime.jp_title)
+    : (anime.en_title || anime.ch_title || anime.jp_title);
 
-  const secondaryTitle = anime.jp_title;
+  // Only show secondary title if it's different from primary
+  const secondaryTitle = anime.jp_title !== primaryTitle ? anime.jp_title : null;
 
   // Check for non-empty descriptions (handle empty strings)
   const hasChDesc = anime.ch_desc && anime.ch_desc.trim().length > 0;
