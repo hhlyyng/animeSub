@@ -402,18 +402,53 @@ namespace backend.Services.Implementations
 
         /// <summary>
         /// Executes a TMDB search and returns the best anime match as a cloned JsonElement.
-        /// First searches TV shows, then falls back to movies if no results found.
+        /// First searches TV shows, then falls back to movies if no results or no backdrop found.
         /// </summary>
         private async Task<JsonElement?> SearchTMDBAsync(string query, int? year)
         {
             // First try TV search
-            var result = await SearchTMDBByTypeAsync(query, year, "tv");
-            if (result != null)
-                return result;
+            var tvResult = await SearchTMDBByTypeAsync(query, year, "tv");
 
-            // Fallback to movie search (for theatrical anime films)
-            Logger.LogInformation("No TV results for '{Query}', trying movie search", query);
-            return await SearchTMDBByTypeAsync(query, year, "movie");
+            // Check if TV result has a valid backdrop
+            bool tvHasBackdrop = tvResult.HasValue && HasValidBackdrop(tvResult.Value);
+
+            if (tvResult != null && tvHasBackdrop)
+            {
+                return tvResult;
+            }
+
+            // Try movie search if no TV results OR TV result has no backdrop
+            if (tvResult == null)
+            {
+                Logger.LogInformation("No TV results for '{Query}', trying movie search", query);
+            }
+            else
+            {
+                Logger.LogInformation("TV result for '{Query}' has no backdrop, trying movie search", query);
+            }
+
+            var movieResult = await SearchTMDBByTypeAsync(query, year, "movie");
+
+            // If movie has backdrop, prefer it; otherwise return TV result (may have other useful info)
+            if (movieResult != null && HasValidBackdrop(movieResult.Value))
+            {
+                return movieResult;
+            }
+
+            // Return TV result if it exists (even without backdrop), otherwise movie result
+            return tvResult ?? movieResult;
+        }
+
+        /// <summary>
+        /// Checks if a search result has a valid (non-null, non-empty) backdrop_path
+        /// </summary>
+        private static bool HasValidBackdrop(JsonElement result)
+        {
+            if (result.TryGetProperty("backdrop_path", out var bp))
+            {
+                return bp.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(bp.GetString());
+            }
+            return false;
         }
 
         /// <summary>

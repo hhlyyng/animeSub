@@ -77,7 +77,7 @@ button:focus-visible {
 /* index.css */
 
 .sidebar-div {
-  @apply bg-[#f7f7f8] flex relative text-black flex-col transition-[width] duration-100 ease-in-out;
+  @apply bg-[#f7f7f8] flex relative text-black flex-col transition-[width] duration-100 ease-in-out h-screen shrink-0 sticky top-0;
 }
 
 .sidebar-div--expanded {

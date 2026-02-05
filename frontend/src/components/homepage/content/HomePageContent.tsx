@@ -31,6 +31,23 @@ const CACHE_KEYS = {
 
 const API_BASE = 'http://localhost:5072/api/anime';
 
+// Preload images in background for smoother UX
+const preloadImages = (animes: AnimeInfo[]) => {
+    const imageUrls = animes
+        .map(anime => anime.images.landscape)
+        .filter(url => url && url.length > 0);
+
+    // Use requestIdleCallback for non-blocking preload, fallback to setTimeout
+    const schedulePreload = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
+
+    schedulePreload(() => {
+        imageUrls.forEach(url => {
+            const img = new Image();
+            img.src = url;
+        });
+    });
+};
+
 const HomeContent = () => {
     const [todayAnimes, setTodayAnimes] = useState<AnimeInfo[]>([]);
     const [bangumiTop10, setBangumiTop10] = useState<AnimeInfo[]>([]);
@@ -103,18 +120,22 @@ const HomeContent = () => {
                 setLoading(true);
                 setError(null);
 
-                // 并行获取所有数据
+                // 并行获取所有数据 (all endpoints need TMDB token for backdrop URLs)
                 const [today, bangumi, anilist, mal] = await Promise.all([
                     fetchAnimeData('/today', CACHE_KEYS.todayAnimes, true),
                     fetchAnimeData('/top/bangumi', CACHE_KEYS.bangumiTop10, true),
-                    fetchAnimeData('/top/anilist', CACHE_KEYS.anilistTop10, false),
-                    fetchAnimeData('/top/mal', CACHE_KEYS.malTop10, false)
+                    fetchAnimeData('/top/anilist', CACHE_KEYS.anilistTop10, true),
+                    fetchAnimeData('/top/mal', CACHE_KEYS.malTop10, true)
                 ]);
 
                 setTodayAnimes(today);
                 setBangumiTop10(bangumi);
                 setAnilistTop10(anilist);
                 setMalTop10(mal);
+
+                // Preload landscape images for smoother hover experience
+                const allAnimes = [...today, ...bangumi, ...anilist, ...mal];
+                preloadImages(allAnimes);
             } catch (err) {
                 setError(err instanceof Error ? err.message : 'Unknown error');
                 console.error('API Error:', err);

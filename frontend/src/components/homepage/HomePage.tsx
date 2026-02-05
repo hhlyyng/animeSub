@@ -29,16 +29,16 @@ const AppContent = () => {
   };
 
   return (
-    <div className="flex min-h-screen w-screen mx-auto overflow-hidden">
-      {/* Sidebar */}
-      <SideBar 
+    <div className="flex h-screen w-screen mx-auto overflow-hidden">
+      {/* Sidebar - fixed position, doesn't scroll */}
+      <SideBar
         language={language}
         currentPage={getCurrentPageType()}
         onLanguageChange={setLanguage}
       />
-      
-      {/* Main Content Area */}
-      <main className={`flex-1 min-w-0 overflow-hidden flex justify-center transition-all duration-200 ${isModalOpen ? 'blur-md pointer-events-none' : ''}`}>
+
+      {/* Main Content Area - scrollable */}
+      <main className={`flex-1 min-w-0 overflow-y-auto overflow-x-hidden flex justify-center transition-all duration-200 ${isModalOpen ? 'blur-md pointer-events-none' : ''}`}>
         <Routes>
           <Route path="/" element={<HomeContent />} />
           <Route path="/home" element={<HomeContent />} />
