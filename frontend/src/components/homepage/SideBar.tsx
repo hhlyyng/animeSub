@@ -9,7 +9,6 @@ import SettingIcon from "../icon/SettingIcon";
 import DownloadIcon from "../icon/DownloadIcon";
 import { DefaultSideBar, CollapseSideBarArrow, ExpandSideBarArrow } from "../icon/SidebarIcon";
 import GithubIcon from "../icon/GithubIcon";
-import LogoutIcon from "../icon/LogoutIcon";
 import LanguageToggleIcon from "../icon/LanguageToggleIcon";
 
 type PageType = 'home' | 'setting' | 'download';

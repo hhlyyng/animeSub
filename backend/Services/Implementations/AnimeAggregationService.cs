@@ -404,12 +404,14 @@ public class AnimeAggregationService : IAnimeAggregationService
 
     public async Task<AnimeListResponse> GetTopAnimeFromBangumiAsync(
         string? bangumiToken = null,
+        string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
-        // Bangumi public API doesn't require authentication
+        // Set tokens for API clients
         if (!string.IsNullOrWhiteSpace(bangumiToken))
             _bangumiClient.SetToken(bangumiToken);
+        _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} anime from Bangumi with enrichment", limit);
 
         try
@@ -500,9 +502,12 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     public async Task<AnimeListResponse> GetTopAnimeFromAniListAsync(
+        string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
+        // Set TMDB token for backdrop enrichment
+        _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} trending anime from AniList with enrichment", limit);
 
         try
@@ -517,18 +522,23 @@ public class AnimeAggregationService : IAnimeAggregationService
                 var jpTitle = anime.NativeTitle ?? "";
                 var enTitle = anime.EnglishTitle ?? "";
                 var enDesc = StripHtmlTags(anime.EnglishSummary ?? "");
-                var landscapeUrl = anime.BannerImage ?? "";
 
                 // Enrich with Bangumi (Chinese data)
                 var (bangumiId, chTitle, chDesc, bangumiUrl) = await EnrichWithBangumiAsync(jpTitle, enTitle);
 
-                // If no landscape from AniList, try TMDB
+                // PRIORITY: Try TMDB first for better quality backdrop
+                var landscapeUrl = "";
                 var tmdbUrl = "";
-                if (string.IsNullOrEmpty(landscapeUrl))
+                var (_, _, tmdbLandscape, tmdbUrlResult) = await EnrichWithTmdbAsync(jpTitle, null);
+                if (!string.IsNullOrEmpty(tmdbLandscape))
                 {
-                    var (_, _, tmdbLandscape, tmdbUrlResult) = await EnrichWithTmdbAsync(jpTitle, null);
                     landscapeUrl = tmdbLandscape;
                     tmdbUrl = tmdbUrlResult;
+                }
+                else
+                {
+                    // Fallback to AniList banner if TMDB has no backdrop
+                    landscapeUrl = anime.BannerImage ?? "";
                 }
 
                 animeDtos.Add(new AnimeInfoDto
@@ -573,9 +583,12 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     public async Task<AnimeListResponse> GetTopAnimeFromMALAsync(
+        string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
+        // Set TMDB token for backdrop enrichment
+        _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} anime from MAL via Jikan with enrichment", limit);
 
         try
@@ -595,24 +608,26 @@ public class AnimeAggregationService : IAnimeAggregationService
                 // Enrich with Bangumi (Chinese data)
                 var (bangumiId, chTitle, chDesc, bangumiUrl) = await EnrichWithBangumiAsync(jpTitle, enTitle);
 
-                // Enrich with AniList (landscape) or TMDB
+                // PRIORITY: Try TMDB first for better quality backdrop
                 var landscapeUrl = "";
                 var anilistUrl = "";
                 var tmdbUrl = "";
 
-                var anilistData = await EnrichWithAniListAsync(jpTitle);
-                if (anilistData != null)
+                var (_, _, tmdbLandscape, tmdbUrlResult) = await EnrichWithTmdbAsync(jpTitle, null);
+                if (!string.IsNullOrEmpty(tmdbLandscape))
                 {
-                    landscapeUrl = anilistData.BannerImage ?? "";
-                    anilistUrl = anilistData.OriSiteUrl ?? "";
-                }
-
-                // If no landscape from AniList, try TMDB
-                if (string.IsNullOrEmpty(landscapeUrl))
-                {
-                    var (_, _, tmdbLandscape, tmdbUrlResult) = await EnrichWithTmdbAsync(jpTitle, null);
                     landscapeUrl = tmdbLandscape;
                     tmdbUrl = tmdbUrlResult;
+                }
+                else
+                {
+                    // Fallback to AniList banner if TMDB has no backdrop
+                    var anilistData = await EnrichWithAniListAsync(jpTitle);
+                    if (anilistData != null)
+                    {
+                        landscapeUrl = anilistData.BannerImage ?? "";
+                        anilistUrl = anilistData.OriSiteUrl ?? "";
+                    }
                 }
 
                 animeDtos.Add(new AnimeInfoDto

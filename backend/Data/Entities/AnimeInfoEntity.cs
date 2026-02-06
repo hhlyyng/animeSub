@@ -37,6 +37,13 @@ public class AnimeInfoEntity
     public string? UrlBangumi { get; set; }
     public string? UrlTmdb { get; set; }
     public string? UrlAnilist { get; set; }
+    
+    // Mikan integration
+    /// <summary>
+    /// Mikan Bangumi ID for RSS feed URL construction
+    /// Used to map anime to Mikan RSS feeds without searching
+    /// </summary>
+    public string? MikanBangumiId { get; set; }
 
     // Schedule info
     public string? AirDate { get; set; }        // Original air date (YYYY-MM-DD)

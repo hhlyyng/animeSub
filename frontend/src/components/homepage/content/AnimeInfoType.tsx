@@ -1,5 +1,6 @@
 export type AnimeInfo = {
   bangumi_id: string;
+  mikan_bangumi_id?: string;
   jp_title: string;
   ch_title?: string;
   en_title: string;

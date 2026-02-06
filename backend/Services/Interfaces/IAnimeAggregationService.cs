@@ -24,28 +24,34 @@ public interface IAnimeAggregationService
     /// Get top anime from Bangumi rankings
     /// </summary>
     /// <param name="bangumiToken">Bangumi API token (optional, public API doesn't require auth)</param>
+    /// <param name="tmdbToken">TMDB API token for backdrop images (optional)</param>
     /// <param name="limit">Number of anime to retrieve</param>
     /// <param name="cancellationToken">Cancellation token</param>
     Task<AnimeListResponse> GetTopAnimeFromBangumiAsync(
         string? bangumiToken = null,
+        string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get trending anime from AniList
     /// </summary>
+    /// <param name="tmdbToken">TMDB API token for backdrop images (optional)</param>
     /// <param name="limit">Number of anime to retrieve</param>
     /// <param name="cancellationToken">Cancellation token</param>
     Task<AnimeListResponse> GetTopAnimeFromAniListAsync(
+        string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Get top anime from MyAnimeList (via Jikan API)
     /// </summary>
+    /// <param name="tmdbToken">TMDB API token for backdrop images (optional)</param>
     /// <param name="limit">Number of anime to retrieve</param>
     /// <param name="cancellationToken">Cancellation token</param>
     Task<AnimeListResponse> GetTopAnimeFromMALAsync(
+        string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default);
 }

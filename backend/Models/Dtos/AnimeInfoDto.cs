@@ -56,8 +56,15 @@ public class AnimeInfoDto
     public AnimeImagesDto Images { get; set; } = new();
 
     /// <summary>
-    /// External website URLs
+    /// External URLs
     /// </summary>
     [JsonPropertyName("external_urls")]
-    public ExternalUrlsDto ExternalUrls { get; set; } = new();
+    public ExternalUrlsDto? ExternalUrls { get; set; }
+    
+    /// <summary>
+    /// Mikan Bangumi ID for RSS feed URL construction
+    /// Used to map anime to Mikan RSS feeds without searching
+    /// </summary>
+    [JsonPropertyName("mikan_bangumi_id")]
+    public string? MikanBangumiId { get; set; }
 }

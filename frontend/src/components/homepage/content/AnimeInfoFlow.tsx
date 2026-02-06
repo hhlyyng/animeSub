@@ -27,7 +27,7 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
   const [isCardExpanded, setIsCardExpanded] = useState(false);
   // 锁定状态：卡片收缩动画进行中时锁定，阻止其他卡片展开
   const [isHoverLocked, setIsHoverLocked] = useState(false);
-  const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lockTimeoutRef = useRef<number | null>(null);
 
   // Modal 状态
   const [selectedAnime, setSelectedAnime] = useState<AnimeInfo | null>(null);

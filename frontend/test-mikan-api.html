@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Mikan API Test</title>
+</head>
+<body>
+    <h1>Mikan API Test</h1>
+    
+    <div>
+        <h2>Test 1: Search for 葬送的芙莉蓮</h2>
+        <button onclick="testSearch()">Test Search</button>
+        <pre id="result1"></pre>
+    </div>
+    
+    <div>
+        <h2>Test 2: Direct curl test</h2>
+        <button onclick="testCurl()">Run curl</button>
+        <pre id="result2"></pre>
+    </div>
+
+    <script>
+        async function testSearch() {
+            const title = "葬送的芙莉蓮";
+            console.log('Testing with title:', title);
+            
+            try {
+                const response = await fetch(`http://localhost:5072/api/mikan/search?title=${encodeURIComponent(title)}`);
+                const data = await response.json();
+                
+                document.getElementById('result1').textContent = JSON.stringify(data, null, 2);
+                console.log('Search result:', data);
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('result1').textContent = 'Error: ' + error.message;
+            }
+        }
+        
+        async function testCurl() {
+            const title = "葬送的芙莉蓮";
+            const url = `http://localhost:5072/api/mikan/search?title=${encodeURIComponent(title)}`;
+            
+            console.log('Curl command:');
+            console.log(`curl "${url}"`);
+            
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                document.getElementById('result2').textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('result2').textContent = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

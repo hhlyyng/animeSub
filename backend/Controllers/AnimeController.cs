@@ -103,17 +103,23 @@ public class AnimeController : ControllerBase
     }
 
     /// <summary>
-    /// Get top 10 anime from Bangumi rankings (public API, no auth required)
+    /// Get top 10 anime from Bangumi rankings
     /// </summary>
+    /// <remarks>
+    /// TMDB token can be provided via header for backdrop images.
+    /// </remarks>
     [HttpGet("top/bangumi")]
     [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetTopBangumi(CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Received request for Bangumi Top 10");
 
-        // Bangumi public API doesn't require authentication
+        // Get TMDB token for backdrop enrichment
+        var tmdbToken = await _tokenStorage.GetTmdbTokenAsync()
+            ?? Request.Headers["X-TMDB-Token"].FirstOrDefault();
+
         var response = await _aggregationService.GetTopAnimeFromBangumiAsync(
-            null, 10, cancellationToken);
+            null, tmdbToken, 10, cancellationToken);
 
         return Ok(new
         {
@@ -126,13 +132,20 @@ public class AnimeController : ControllerBase
     /// <summary>
     /// Get top 10 trending anime from AniList
     /// </summary>
+    /// <remarks>
+    /// TMDB token can be provided via header for better backdrop images.
+    /// </remarks>
     [HttpGet("top/anilist")]
     [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetTopAniList(CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Received request for AniList Top 10");
 
-        var response = await _aggregationService.GetTopAnimeFromAniListAsync(10, cancellationToken);
+        // Get TMDB token for backdrop enrichment
+        var tmdbToken = await _tokenStorage.GetTmdbTokenAsync()
+            ?? Request.Headers["X-TMDB-Token"].FirstOrDefault();
+
+        var response = await _aggregationService.GetTopAnimeFromAniListAsync(tmdbToken, 10, cancellationToken);
 
         return Ok(new
         {
@@ -145,13 +158,20 @@ public class AnimeController : ControllerBase
     /// <summary>
     /// Get top 10 anime from MyAnimeList (via Jikan API)
     /// </summary>
+    /// <remarks>
+    /// TMDB token can be provided via header for backdrop images.
+    /// </remarks>
     [HttpGet("top/mal")]
     [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetTopMAL(CancellationToken cancellationToken = default)
     {
         _logger.LogInformation("Received request for MAL Top 10");
 
-        var response = await _aggregationService.GetTopAnimeFromMALAsync(10, cancellationToken);
+        // Get TMDB token for backdrop enrichment
+        var tmdbToken = await _tokenStorage.GetTmdbTokenAsync()
+            ?? Request.Headers["X-TMDB-Token"].FirstOrDefault();
+
+        var response = await _aggregationService.GetTopAnimeFromMALAsync(tmdbToken, 10, cancellationToken);
 
         return Ok(new
         {
