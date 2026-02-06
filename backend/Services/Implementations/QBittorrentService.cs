@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using backend.Models.Configuration;
 using backend.Services.Interfaces;
+using backend.Data.Entities;
 
 namespace backend.Services.Implementations;
 
@@ -46,7 +47,6 @@ public class QBittorrentService : IQBittorrentService
         try
         {
             await EnsureAuthenticatedAsync();
-            // Try to get app version as a simple connectivity test
             var request = CreateRequest(HttpMethod.Get, "/api/v2/app/version");
             var response = await _httpClient.SendAsync(request);
             return response.IsSuccessStatusCode;
@@ -67,7 +67,6 @@ public class QBittorrentService : IQBittorrentService
             new("urls", torrentUrl)
         };
 
-        // Apply defaults from config, then override with parameters
         var actualSavePath = savePath ?? _config.DefaultSavePath;
         var actualCategory = category ?? _config.Category;
         var actualPaused = paused ?? _config.PauseTorrentAfterAdd;
@@ -211,7 +210,7 @@ public class QBittorrentService : IQBittorrentService
         }
     }
 
-    public async Task DeleteTorrentAsync(string hash, bool deleteFiles = false)
+    public async Task<bool> DeleteTorrentAsync(string hash, bool deleteFiles = false)
     {
         await EnsureAuthenticatedAsync();
 
@@ -228,15 +227,61 @@ public class QBittorrentService : IQBittorrentService
             if (response.IsSuccessStatusCode)
             {
                 _logger.LogInformation("Deleted torrent: {Hash} (deleteFiles: {DeleteFiles})", hash, deleteFiles);
+                return true;
             }
             else
             {
                 _logger.LogWarning("Failed to delete torrent {Hash}. Status: {Status}", hash, response.StatusCode);
+                return false;
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error deleting torrent: {Hash}", hash);
+            return false;
+        }
+    }
+
+    public async Task<bool> AddTorrentWithTrackingAsync(
+        string torrentUrl,
+        string torrentHash,
+        string title,
+        long fileSize,
+        DownloadSource source,
+        int? subscriptionId = null)
+    {
+        var success = await AddTorrentAsync(torrentUrl, savePath: null, category: "anime");
+
+        _logger.LogInformation("Added torrent with tracking: Hash={Hash}, Source={Source}", torrentHash, source);
+
+        return success;
+    }
+
+    public async Task<int> SyncManualDownloadsProgressAsync()
+    {
+        try
+        {
+            await EnsureAuthenticatedAsync();
+            var request = CreateRequest(HttpMethod.Get, "/api/v2/torrents/info");
+            var response = await _httpClient.SendAsync(request);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Failed to get torrents for progress sync. Status: {Status}", response.StatusCode);
+                return 0;
+            }
+
+            var json = await response.Content.ReadAsStringAsync();
+            var torrents = JsonSerializer.Deserialize<List<QBTorrentInfo>>(json, JsonOptions) ?? new List<QBTorrentInfo>();
+
+            _logger.LogInformation("Synced progress for {Count} torrents", torrents.Count);
+
+            return torrents.Count;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error syncing download progress");
+            return 0;
         }
     }
 
@@ -252,7 +297,6 @@ public class QBittorrentService : IQBittorrentService
         await _loginLock.WaitAsync();
         try
         {
-            // Double-check after acquiring lock
             if (!string.IsNullOrEmpty(_sessionCookie) && DateTime.UtcNow < _sessionExpiry)
             {
                 return;
@@ -294,7 +338,6 @@ public class QBittorrentService : IQBittorrentService
                 throw new InvalidOperationException("qBittorrent login succeeded but no session cookie received");
             }
 
-            // Session valid for 1 hour, refresh after 50 minutes
             _sessionExpiry = DateTime.UtcNow.AddMinutes(50);
             _logger.LogInformation("Successfully authenticated with qBittorrent at {BaseUrl}", BaseUrl);
         }

@@ -1,5 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using backend.Models.Dtos;
+using backend.Data;
+using backend.Data.Entities;
 using backend.Services.Interfaces;
 using System.Diagnostics;
 
@@ -15,15 +19,18 @@ public class MikanController : ControllerBase
     private readonly IMikanClient _mikanClient;
     private readonly IQBittorrentService _qbittorrentService;
     private readonly ILogger<MikanController> _logger;
+    private readonly IServiceProvider _serviceProvider;
 
     public MikanController(
         IMikanClient mikanClient,
         IQBittorrentService qbittorrentService,
-        ILogger<MikanController> logger)
+        ILogger<MikanController> logger,
+        IServiceProvider serviceProvider)
     {
         _mikanClient = mikanClient;
         _qbittorrentService = qbittorrentService;
         _logger = logger;
+        _serviceProvider = serviceProvider;
     }
 
     /// <summary>
@@ -144,46 +151,73 @@ public class MikanController : ControllerBase
             return BadRequest(new { message = "Magnet link is required" });
         }
 
-        var success = await _qbittorrentService.AddTorrentAsync(
+        var success = await _qbittorrentService.AddTorrentWithTrackingAsync(
             request.MagnetLink,
-            savePath: null,
-            category: "anime",
-            paused: false);
+            request.TorrentHash,
+            request.Title,
+            0,
+            DownloadSource.Manual);
 
-        if (success)
+        if (!success)
         {
-            _logger.LogInformation("Successfully added torrent: {Title}", request.Title);
-            return Ok(new { message = "Torrent added successfully" });
-        }
-        else
-        {
-            _logger.LogWarning("Failed to add torrent: {Title}", request.Title);
             return StatusCode(500, new { message = "Failed to add torrent to qBittorrent" });
         }
+
+        using var scope = _serviceProvider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+
+        var download = new DownloadHistoryEntity
+        {
+            TorrentUrl = request.MagnetLink,
+            TorrentHash = request.TorrentHash,
+            Title = request.Title,
+            Status = DownloadStatus.Pending,
+            Source = DownloadSource.Manual,
+            DiscoveredAt = DateTime.UtcNow,
+            DownloadedAt = DateTime.UtcNow,
+            Progress = 0
+        };
+
+        db.DownloadHistory.Add(download);
+        await db.SaveChangesAsync();
+
+        _logger.LogInformation("Manual download added: Hash={Hash}, Source={Source}", request.TorrentHash, DownloadSource.Manual);
+
+        return Ok(new { message = "Download added successfully", hash = request.TorrentHash });
     }
 
     /// <summary>
     /// Check download status of torrents
     /// </summary>
-    /// <returns>List of torrents in qBittorrent</returns>
+    /// <returns>List of torrents in database</returns>
     [HttpGet("torrents")]
     public async Task<ActionResult> GetTorrents()
     {
         try
         {
-            var torrents = await _qbittorrentService.GetTorrentsAsync(category: "anime");
-            return Ok(torrents.Select(t => new
-            {
-                hash = t.Hash,
-                name = t.Name,
-                size = t.Size,
-                state = t.State,
-                progress = t.Progress
-            }));
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+
+            var torrents = await db.DownloadHistory
+                .Where(d => d.Source == DownloadSource.Manual)
+                .OrderByDescending(d => d.DownloadedAt ?? d.DiscoveredAt)
+                .Select(d => new
+                {
+                    hash = d.TorrentHash,
+                    name = d.Title,
+                    size = d.FileSize,
+                    state = d.Status.ToString(),
+                    progress = d.Progress,
+                    downloadSpeed = d.DownloadSpeed,
+                    eta = d.Eta
+                })
+                .ToListAsync();
+
+            return Ok(torrents);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error getting torrents list");
+            _logger.LogError(ex, "Error getting torrents list from database");
             return StatusCode(500, new { message = "Failed to get torrents" });
         }
     }

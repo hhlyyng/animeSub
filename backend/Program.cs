@@ -153,9 +153,10 @@ builder.Services.AddScoped<IAnimeCacheService, AnimeCacheService>();
 builder.Services.AddScoped<ISubscriptionRepository, SubscriptionRepository>();
 builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 
-// Register background services
-builder.Services.AddHostedService<backend.Services.Background.RssPollingService>();
-builder.Services.AddHostedService<backend.Services.Background.AnimePreFetchService>();
+    // Register background services
+    builder.Services.AddHostedService<backend.Services.Background.RssPollingService>();
+    builder.Services.AddHostedService<backend.Services.Background.AnimePreFetchService>();
+    builder.Services.AddHostedService<backend.Services.Background.DownloadProgressSyncService>();
 
 // Register resilience service (Polly retry policies)
 builder.Services.AddSingleton<IResilienceService, ResilienceService>();

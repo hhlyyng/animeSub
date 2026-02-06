@@ -74,6 +74,8 @@ public class AnimeDbContext : DbContext
             // Index for queries
             entity.HasIndex(e => e.SubscriptionId);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.Source);
+            entity.HasIndex(e => e.LastSyncedAt);
         });
     }
 }

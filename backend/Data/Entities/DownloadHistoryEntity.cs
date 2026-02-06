@@ -74,9 +74,54 @@ public class DownloadHistoryEntity
     public DateTime DiscoveredAt { get; set; }
 
     /// <summary>
-    /// When the torrent was pushed to qBittorrent
+    /// When torrent was pushed to qBittorrent
     /// </summary>
     public DateTime? DownloadedAt { get; set; }
+
+    /// <summary>
+    /// Download source: Manual (user clicked) or Subscription (auto polling)
+    /// </summary>
+    public DownloadSource Source { get; set; } = DownloadSource.Manual;
+
+    /// <summary>
+    /// Current download progress (0-100)
+    /// </summary>
+    public double Progress { get; set; } = 0;
+
+    /// <summary>
+    /// Download speed in bytes per second
+    /// </summary>
+    public long? DownloadSpeed { get; set; }
+
+    /// <summary>
+    /// ETA in seconds
+    /// </summary>
+    public int? Eta { get; set; }
+
+    /// <summary>
+    /// Number of seeders
+    /// </summary>
+    public int? NumSeeds { get; set; }
+
+    /// <summary>
+    /// Number of leechers
+    /// </summary>
+    public int? NumLeechers { get; set; }
+
+    /// <summary>
+    /// Last synced with qBittorrent at
+    /// </summary>
+    public DateTime? LastSyncedAt { get; set; }
+
+    /// <summary>
+    /// Save path (from qBittorrent)
+    /// </summary>
+    public string? SavePath { get; set; }
+
+    /// <summary>
+    /// qBittorrent category
+    /// </summary>
+    public string? Category { get; set; }
 
     /// <summary>
     /// Navigation property to subscription

@@ -1,3 +1,5 @@
+using backend.Data.Entities;
+
 namespace backend.Services.Interfaces;
 
 /// <summary>
@@ -59,7 +61,32 @@ public interface IQBittorrentService
     /// </summary>
     /// <param name="hash">Torrent info hash</param>
     /// <param name="deleteFiles">Whether to delete downloaded files</param>
-    Task DeleteTorrentAsync(string hash, bool deleteFiles = false);
+    /// <returns>True if deletion was successful</returns>
+    Task<bool> DeleteTorrentAsync(string hash, bool deleteFiles = false);
+
+    /// <summary>
+    /// Add torrent with database tracking
+    /// </summary>
+    /// <param name="torrentUrl">URL to torrent file or magnet link</param>
+    /// <param name="torrentHash">Torrent magnet hash</param>
+    /// <param name="title">Torrent title</param>
+    /// <param name="fileSize">File size in bytes</param>
+    /// <param name="source">Download source (Manual/Subscription)</param>
+    /// <param name="subscriptionId">Optional subscription ID</param>
+    /// <returns>True if torrent was added successfully</returns>
+    Task<bool> AddTorrentWithTrackingAsync(
+        string torrentUrl,
+        string torrentHash,
+        string title,
+        long fileSize,
+        DownloadSource source,
+        int? subscriptionId = null);
+
+    /// <summary>
+    /// Sync download progress for manual downloads from qBittorrent
+    /// </summary>
+    /// <returns>Number of torrents synced</returns>
+    Task<int> SyncManualDownloadsProgressAsync();
 }
 
 /// <summary>
