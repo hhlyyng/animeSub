@@ -186,7 +186,7 @@ public partial class MikanClient : IMikanClient
     {
         var searchUrl = $"Home/Search?searchstr={Uri.EscapeDataString(title)}";
 
-        _logger.LogInformation("Searching Mikan for: {Title}, URL: {SearchUrl}", title, searchUrl);
+        _logger.LogInformation("Searching Mikan HTML for: {Title}, URL: {SearchUrl}", title, searchUrl);
 
         try
         {
@@ -196,9 +196,9 @@ public partial class MikanClient : IMikanClient
 
             var htmlContent = await response.Content.ReadAsStringAsync();
             _logger.LogInformation("Mikan search HTML content length: {Length} chars", htmlContent.Length);
-            
+
             var result = ParseSearchHtml(htmlContent, title);
-            
+
             if (result != null)
             {
                 _logger.LogInformation("Search result found: AnimeTitle={AnimeTitle}, SeasonsCount={SeasonsCount}, DefaultSeason={DefaultSeason}",
@@ -208,12 +208,12 @@ public partial class MikanClient : IMikanClient
             {
                 _logger.LogWarning("Search result is null for: {Title}", title);
             }
-            
+
             return result;
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "Failed to search Mikan for title: {Title}", title);
+            _logger.LogError(ex, "Failed to search Mikan HTML for title: {Title}", title);
             return null;
         }
         catch (Exception ex)
@@ -226,55 +226,51 @@ public partial class MikanClient : IMikanClient
     private MikanSearchResult? ParseSearchHtml(string htmlContent, string searchTerm)
     {
         _logger.LogInformation("Starting HTML parsing for search term: {SearchTerm}", searchTerm);
-        
+
         var doc = new HtmlDocument();
         doc.LoadHtml(htmlContent);
         _logger.LogInformation("HTML loaded successfully");
 
-        // Try to find RSS links in search results table
-        var rssLinks = doc.DocumentNode.SelectNodes("//tr//a[contains(@href, 'RSS')]");
-        
-        if (rssLinks != null && rssLinks.Count > 0)
+        // Find all Bangumi links in search results
+        var bangumiLinks = doc.DocumentNode.SelectNodes("//a[contains(@href, '/Home/Bangumi/')]");
+
+        if (bangumiLinks == null || bangumiLinks.Count == 0)
         {
-            _logger.LogInformation("Found {Count} RSS links in search results", rssLinks.Count);
-            
-            var searchResult = new MikanSearchResult
-            {
-                AnimeTitle = searchTerm
-            };
+            _logger.LogWarning("No Bangumi links found in search results");
+            return null;
+        }
 
-            var seenIds = new HashSet<string>();
-            
-            foreach (var rssLink in rssLinks)
+        _logger.LogInformation("Found {Count} Bangumi links", bangumiLinks.Count);
+
+        var searchResult = new MikanSearchResult
+        {
+            AnimeTitle = searchTerm
+        };
+
+        var seenIds = new HashSet<string>();
+
+        foreach (var bangumiLink in bangumiLinks)
+        {
+            var href = bangumiLink.GetAttributeValue("href", "");
+            var bangumiId = ExtractBangumiIdFromBangumiUrl(href);
+
+            if (!string.IsNullOrEmpty(bangumiId) && !seenIds.Contains(bangumiId))
             {
-                var href = rssLink.GetAttributeValue("href", "");
-                var mikanId = ExtractBangumiIdFromUrl(href);
-                
-                if (!string.IsNullOrEmpty(mikanId) && !seenIds.Contains(mikanId))
+                seenIds.Add(bangumiId);
+
+                string seasonName = "Season 1";
+                int year = 0;
+
+                // Try to detect season and year from link's parent elements
+                var liElement = bangumiLink.Ancestors("li").FirstOrDefault();
+                if (liElement != null)
                 {
-                    seenIds.Add(mikanId);
-                    
-                    var row = rssLink.Ancestors("tr").FirstOrDefault();
-                    string year = "0";
-                    string seasonName = "Season 1";
-                    
-                    if (row != null)
+                    // Check for title text in the same list item
+                    var titleSpan = liElement.SelectSingleNode(".//span[contains(@class, 'an-title')]");
+                    if (titleSpan != null)
                     {
-                        string titleText = "";
-                        // Try to extract year from title cell
-                        var titleCell = row.SelectSingleNode(".//td[@class='sk-td-2'] | .//td[2]");
+                        var titleText = titleSpan.InnerText;
 
-                        if (titleCell != null)
-                        {
-                            titleText = titleCell.InnerText;
-                            var yearMatch = Regex.Match(titleText, @"\b(20\d{2})\b");
-                            if (yearMatch.Success && int.TryParse(yearMatch.Groups[1].Value, out var yearNum))
-                            {
-                                year = yearNum.ToString();
-                            }
-                        }
-
-                        // Check if it's Season 2 based on title text
                         if (titleText.ToLowerInvariant().Contains("season 2") ||
                             titleText.ToLowerInvariant().Contains("s2") ||
                             titleText.ToLowerInvariant().Contains("第二季") ||
@@ -282,27 +278,47 @@ public partial class MikanClient : IMikanClient
                         {
                             seasonName = "Season 2";
                         }
+
+                        var yearMatch = Regex.Match(titleText, @"\b(20\d{2})\b");
+                        if (yearMatch.Success && int.TryParse(yearMatch.Groups[1].Value, out var yearNum))
+                        {
+                            year = yearNum;
+                        }
                     }
-
-                    searchResult.Seasons.Add(new MikanSeasonInfo
-                    {
-                        SeasonName = seasonName,
-                        MikanBangumiId = mikanId,
-                        Year = int.Parse(year)
-                    });
                 }
-            }
 
-            // Set default season to the first one (most recent)
-            if (searchResult.Seasons.Count > 0)
-            {
-                searchResult.DefaultSeason = 0;
-                _logger.LogInformation("Found {Count} seasons via RSS links", searchResult.Seasons.Count);
-                return searchResult;
+                searchResult.Seasons.Add(new MikanSeasonInfo
+                {
+                    SeasonName = seasonName,
+                    MikanBangumiId = bangumiId,
+                    Year = year
+                });
             }
         }
 
-        _logger.LogWarning("No search results found for: {SearchTerm}", searchTerm);
+        if (searchResult.Seasons.Count > 0)
+        {
+            searchResult.DefaultSeason = 0;
+            _logger.LogInformation("Found {Count} seasons via Bangumi links", searchResult.Seasons.Count);
+            return searchResult;
+        }
+
+        _logger.LogWarning("No valid seasons found");
+        return null;
+    }
+
+    private string? ExtractBangumiIdFromBangumiUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url))
+            return null;
+
+        // Extract numeric bangumiId from URL like: /Home/Bangumi/229
+        var match = Regex.Match(url, @"/Home/Bangumi/(\d+)");
+        if (match.Success)
+        {
+            return match.Groups[1].Value;
+        }
+
         return null;
     }
 

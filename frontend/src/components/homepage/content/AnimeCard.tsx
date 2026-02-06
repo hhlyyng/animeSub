@@ -18,7 +18,7 @@ export function AnimeCard({ anime, onSelect, onHoverChange, isHoverLocked }: Ani
     ? (anime.ch_title || anime.en_title || anime.jp_title)
     : (anime.en_title || anime.ch_title || anime.jp_title);
 
-  const hasLandscape = !!anime.images.landscape;
+  const hasLandscape = !!anime.images?.landscape;
 
   // 实际是否展开：需要hover且未被锁定（或者是自己触发的锁定）
   const shouldExpand = isHovered && !isHoverLocked;
@@ -64,9 +64,9 @@ export function AnimeCard({ anime, onSelect, onHoverChange, isHoverLocked }: Ani
         }}
       >
         <img
-          src={shouldExpand && anime.images.landscape
+          src={shouldExpand && anime.images?.landscape
                ? anime.images.landscape
-               : anime.images.portrait}
+               : anime.images?.portrait}
           alt={displayTitle}
           className="absolute inset-0 h-full w-full object-cover transition-opacity duration-300"
         />

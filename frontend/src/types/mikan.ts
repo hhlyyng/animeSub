@@ -1,5 +1,3 @@
-import type { MikanSeasonInfo, ParsedRssItem, MikanFeedResponse } from "../../types/mikan";
-
 export type DownloadPreferences = {
   resolution: '1080p' | '720p' | '4K' | 'all';
   subgroup: string;

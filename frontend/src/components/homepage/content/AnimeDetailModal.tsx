@@ -8,6 +8,9 @@ import { LoadingSpinner } from "./LoadingSpinner";
 import { ErrorMessage } from "./ErrorMessage";
 import type { MikanSeasonInfo, ParsedRssItem } from "../../../types/mikan";
 import * as mikanApi from "../../../services/mikanApi";
+import { StarIcon } from "../../icon/StarIcon";
+import { CloseIcon } from "../../icon/CloseIcon";
+import { ExternalLinkIcon } from "../../icon/ExternalLinkIcon";
 
 type AnimeDetailModalProps = {
   anime: AnimeInfo;
@@ -35,8 +38,8 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
   // 根据语言选择标题和描述，fallback to jp_title if both ch/en are empty
   const primaryTitle = language === 'zh'
-    ? (anime.ch_title || anime.en_title || anime.jp_title)
-    : (anime.en_title || anime.ch_title || anime.jp_title);
+    ? (anime.ch_title || anime.en_title || anime.jp_title || 'Unknown Title')
+    : (anime.en_title || anime.ch_title || anime.jp_title || 'Unknown Title');
 
   // Only show secondary title if it's different from primary
   const secondaryTitle = anime.jp_title !== primaryTitle ? anime.jp_title : null;
@@ -59,29 +62,14 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const subtitleLabel = language === 'zh' ? '字幕' : 'Subtitle';
   const allLabel = language === 'zh' ? '全部' : 'All';
 
-  // Load seasons when modal opens
-  useEffect(() => {
-    if (open && anime.jp_title) {
-      console.log('Modal opened, anime:', anime);
-      loadSeasons();
-    }
-  }, [open, anime, loadSeasons]);
-
-  // Load feed when season changes
-  useEffect(() => {
-    if (seasons.length > 0) {
-      loadFeed();
-    }
-  }, [selectedSeasonIndex, seasons, loadFeed]);
-
   const loadSeasons = useCallback(async () => {
-    console.log('Loading seasons for anime:', anime);
-    console.log('jp_title:', anime.jp_title);
-    console.log('mikan_bangumi_id:', anime.mikan_bangumi_id);
+    console.log('=== Loading seasons for anime ===', anime);
+    console.log('Title options - ch_title:', anime.ch_title, 'en_title:', anime.en_title, 'jp_title:', anime.jp_title);
+    console.log('Cached mikan_bangumi_id:', anime.mikan_bangumi_id);
 
     // If we already have MikanBangumiId from database, use it directly
     if (anime.mikan_bangumi_id) {
-      console.log('Using cached Mikan Bangumi ID:', anime.mikan_bangumi_id);
+      console.log('✅ Using cached Mikan Bangumi ID:', anime.mikan_bangumi_id);
 
       try {
         setLoading(true);
@@ -98,43 +86,65 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Failed to load seasons';
         setError(errorMessage);
-        console.error('Error loading seasons:', err);
+        console.error('❌ Error loading seasons:', err);
       } finally {
         setLoading(false);
       }
       return;
     }
 
-    if (!anime.jp_title) {
-      console.error('No jp_title available');
-      setError('No anime title available');
+    // Try Chinese title first (best match rate), then English, then Japanese
+    const searchTitle = anime.ch_title || anime.en_title || anime.jp_title;
+
+    if (!searchTitle) {
+      console.error('❌ No title available for search');
+      setError(language === 'zh' ? '没有可搜索的标题' : 'No title available for search');
       return;
     }
 
+    console.log('🔍 Searching Mikan with title:', searchTitle);
+
     try {
       setLoading(true);
       setError(null);
-      const result = await mikanApi.searchMikanAnime(anime.jp_title);
-      console.log('Search result:', result);
+      const result = await mikanApi.searchMikanAnime(searchTitle);
+      console.log('📋 Search result:', result);
+
+      if (!result || !result.seasons || result.seasons.length === 0) {
+        console.warn('⚠️ No seasons found in search result');
+        setError(language === 'zh' ? '未找到匹配的动画' : 'No matching anime found');
+        return;
+      }
+
       setSeasons(result.seasons);
       setSelectedSeasonIndex(result.defaultSeason);
+      console.log(`✅ Loaded ${result.seasons.length} seasons`);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to search';
       setError(errorMessage);
-      console.error('Error searching seasons:', err);
+      console.error('❌ Error searching seasons:', err);
     } finally {
       setLoading(false);
     }
-  }, [anime]);
+  }, [anime, language]);
 
   const loadFeed = useCallback(async () => {
-    if (seasons.length === 0) return;
+    if (seasons.length === 0) {
+      console.warn('⚠️ No seasons available, cannot load feed');
+      return;
+    }
+
+    const season = seasons[selectedSeasonIndex];
+    console.log('=== Loading RSS feed ===');
+    console.log('Selected season:', season);
+    console.log('MikanBangumiId:', season.mikanBangumiId);
 
     try {
       setLoading(true);
       setError(null);
-      const season = seasons[selectedSeasonIndex];
+
       const feed = await mikanApi.getMikanFeed(season.mikanBangumiId);
+      console.log('📋 Feed loaded:', feed);
 
       setFeedItems(feed.items);
       setAvailableSubgroups(['all', ...feed.availableSubgroups]);
@@ -144,21 +154,24 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       // Check download status
       const status = await mikanApi.checkDownloadStatus(feed.items);
       setDownloadStatus(status);
+      console.log(`✅ Found ${feed.items.length} torrent items`);
 
       // Cache in sessionStorage
-      const cacheKey = `mikan-feed-${anime.jp_title}-${season.mikanBangumiId}`;
+      const cacheKey = `mikan-feed-${season.mikanBangumiId}`;
       try {
         sessionStorage.setItem(cacheKey, JSON.stringify(feed));
+        console.log('💾 Feed cached:', cacheKey);
       } catch (e) {
         console.warn('Failed to cache feed:', e);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load feed');
-      console.error('Error loading feed:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load feed';
+      setError(errorMessage);
+      console.error('❌ Error loading feed:', err);
     } finally {
       setLoading(false);
     }
-  }, [seasons, selectedSeasonIndex, anime]);
+  }, [seasons, selectedSeasonIndex]);
 
   const handleDownload = async (item: ParsedRssItem) => {
     try {
@@ -205,6 +218,21 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const handlePreferenceChange = (key: keyof typeof downloadPreferences, value: string) => {
     setDownloadPreferences({ [key]: value });
   };
+
+  // Load seasons when modal opens
+  useEffect(() => {
+    if (open && anime.jp_title) {
+      console.log('Modal opened, anime:', anime);
+      loadSeasons();
+    }
+  }, [open, anime, loadSeasons]);
+
+  // Load feed when season changes
+  useEffect(() => {
+    if (seasons.length > 0) {
+      loadFeed();
+    }
+  }, [selectedSeasonIndex, seasons, loadFeed]);
 
   // Filter items based on preferences
   const filteredItems = feedItems.filter(item => {
@@ -262,15 +290,9 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         >
           {/* 分数 */}
           <div className="flex-shrink-0 inline-flex items-center px-2.5 py-0.5 bg-yellow-100 rounded-full">
-            <svg
-              className="w-4 h-4 text-yellow-500 mr-1"
-              fill="currentColor"
-              viewBox="0 0 20 20"
-            >
-              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-            </svg>
+            <StarIcon />
             <span className="text-sm font-semibold text-gray-900">
-              {anime.score}
+              {anime.score || 'N/A'}
             </span>
           </div>
 
@@ -285,19 +307,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
             }}
             aria-label="Close"
           >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <path
-                className="stroke-gray-600 group-hover:stroke-black transition-colors"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={4}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
+            <CloseIcon />
           </button>
         </div>
 
@@ -307,7 +317,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
             {/* 左: 图片 */}
             <div className="w-48 flex-shrink-0">
               <img
-                src={anime.images.portrait}
+                src={anime.images?.portrait || ''}
                 alt={primaryTitle}
                 className="w-full h-auto rounded-lg object-cover shadow-md"
               />
@@ -337,7 +347,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
               <div>
                 <h3 className="text-sm font-semibold text-gray-700 mb-2">{linksLabel}</h3>
                 <div className="flex flex-wrap gap-2">
-                  {anime.external_urls.bangumi && (
+                  {anime.external_urls?.bangumi && (
                     <a
                       href={anime.external_urls.bangumi}
                       target="_blank"
@@ -345,22 +355,10 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                       className="inline-flex items-center px-3 py-1.5 bg-transparent border border-gray-300 hover:bg-gray-100 text-gray-700 rounded-lg transition-colors text-sm"
                     >
                       Bangumi
-                      <svg
-                        className="w-3.5 h-3.5 ml-1.5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                        />
-                      </svg>
+                      <ExternalLinkIcon />
                     </a>
                   )}
-                  {anime.external_urls.tmdb && (
+                  {anime.external_urls?.tmdb && (
                     <a
                       href={anime.external_urls.tmdb}
                       target="_blank"
@@ -368,22 +366,10 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                       className="inline-flex items-center px-3 py-1.5 bg-transparent border border-gray-300 hover:bg-gray-100 text-gray-700 rounded-lg transition-colors text-sm"
                     >
                       TMDB
-                      <svg
-                        className="w-3.5 h-3.5 ml-1.5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                        />
-                      </svg>
+                      <ExternalLinkIcon />
                     </a>
                   )}
-                  {anime.external_urls.anilist && (
+                  {anime.external_urls?.anilist && (
                     <a
                       href={anime.external_urls.anilist}
                       target="_blank"
@@ -391,19 +377,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                       className="inline-flex items-center px-3 py-1.5 bg-transparent border border-gray-300 hover:bg-gray-100 text-gray-700 rounded-lg transition-colors text-sm"
                     >
                       AniList
-                      <svg
-                        className="w-3.5 h-3.5 ml-1.5"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                        />
-                      </svg>
+                      <ExternalLinkIcon />
                     </a>
                   )}
                 </div>
