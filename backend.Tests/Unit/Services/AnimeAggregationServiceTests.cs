@@ -258,6 +258,33 @@ public class AnimeAggregationServiceTests
         _tmdbClientMock.Verify(t => t.SetToken("tmdb-token"), Times.Once);
     }
 
+    [Fact]
+    public async Task GetTodayAnimeEnrichedAsync_WhenEntityHasMikanBangumiId_MapsToDto()
+    {
+        // Arrange
+        var entity = CreateAnimeInfoEntities(1).First();
+        entity.MikanBangumiId = "229";
+
+        _repositoryMock
+            .Setup(r => r.GetAnimesByWeekdayAsync(It.IsAny<int>()))
+            .ReturnsAsync(new List<AnimeInfoEntity> { entity });
+
+        _resilienceServiceMock
+            .Setup(r => r.ExecuteWithRetryAndMetadataAsync(
+                It.IsAny<Func<CancellationToken, Task<JsonElement>>>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
+
+        // Act
+        var result = await _sut.GetTodayAnimeEnrichedAsync();
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.Animes.Should().HaveCount(1);
+        result.Animes[0].MikanBangumiId.Should().Be("229");
+    }
+
     #endregion
 
     #region Incremental Update Tests

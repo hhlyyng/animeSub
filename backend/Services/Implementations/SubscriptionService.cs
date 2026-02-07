@@ -289,7 +289,8 @@ public class SubscriptionService : ISubscriptionService
                         Title = item.Title,
                         FileSize = item.FileSize,
                         PublishedAt = item.PublishedAt,
-                        Status = DownloadStatus.Pending
+                        Status = DownloadStatus.Pending,
+                        Source = DownloadSource.Subscription
                     };
 
                     await _repository.CreateDownloadHistoryAsync(history);
@@ -299,7 +300,13 @@ public class SubscriptionService : ISubscriptionService
                         ? item.MagnetLink
                         : item.TorrentUrl;
 
-                    var success = await _qbService.AddTorrentAsync(torrentUrl);
+                    var success = await _qbService.AddTorrentWithTrackingAsync(
+                        torrentUrl,
+                        item.TorrentHash,
+                        item.Title,
+                        item.FileSize ?? 0,
+                        DownloadSource.Subscription,
+                        subscription.Id);
 
                     if (success)
                     {

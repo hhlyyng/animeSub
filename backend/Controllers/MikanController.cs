@@ -20,6 +20,9 @@ public class MikanController : ControllerBase
     private readonly IQBittorrentService _qbittorrentService;
     private readonly ILogger<MikanController> _logger;
     private readonly IServiceProvider _serviceProvider;
+    private const string ManualSubscriptionTitle = "__manual_download_tracking__";
+    private const string ManualSubscriptionMikanId = "manual";
+    private const int ManualSubscriptionBangumiId = -1;
 
     public MikanController(
         IMikanClient mikanClient,
@@ -37,15 +40,17 @@ public class MikanController : ControllerBase
     /// Search for an anime on Mikan and return all seasons
     /// </summary>
     /// <param name="title">Anime title to search for</param>
+    /// <param name="bangumiId">Optional Bangumi ID for caching the matched Mikan ID</param>
     /// <returns>Search result with seasons</returns>
     [HttpGet("search")]
-    public async Task<ActionResult<MikanSearchResult>> Search([FromQuery] string title)
+    public async Task<ActionResult<MikanSearchResult>> Search([FromQuery] string title, [FromQuery] string? bangumiId = null)
     {
         // Log the full request information
         _logger.LogInformation("=== Mikan Search API Called ===");
         _logger.LogInformation("Path: {Path}", Request.Path);
         _logger.LogInformation("QueryString: {QueryString}", Request.QueryString);
         _logger.LogInformation("Title parameter: {Title}", title);
+        _logger.LogInformation("BangumiId parameter: {BangumiId}", bangumiId);
         _logger.LogInformation("Title length: {Length}", title?.Length ?? 0);
 
         if (string.IsNullOrWhiteSpace(title))
@@ -66,6 +71,18 @@ public class MikanController : ControllerBase
             {
                 _logger.LogWarning("No results found for: {Title} (elapsed: {Elapsed}ms)", title, stopwatch.ElapsedMilliseconds);
                 return NotFound(new { message = $"No results found for: {title}" });
+            }
+
+            if (int.TryParse(bangumiId, out var parsedBangumiId) && parsedBangumiId > 0)
+            {
+                try
+                {
+                    await TryCacheMikanBangumiIdAsync(parsedBangumiId, result);
+                }
+                catch (Exception cacheEx)
+                {
+                    _logger.LogWarning(cacheEx, "Failed to cache MikanBangumiId for BangumiId={BangumiId}", parsedBangumiId);
+                }
             }
 
             _logger.LogInformation("Search SUCCESS for: {Title} (elapsed: {Elapsed}ms), Seasons: {Count}", 
@@ -151,6 +168,28 @@ public class MikanController : ControllerBase
             return BadRequest(new { message = "Magnet link is required" });
         }
 
+        if (string.IsNullOrWhiteSpace(request.TorrentHash))
+        {
+            return BadRequest(new { message = "Torrent hash is required" });
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+
+        var existingDownload = await db.DownloadHistory
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d => d.TorrentHash == request.TorrentHash);
+
+        if (existingDownload != null)
+        {
+            return Ok(new
+            {
+                message = "Download already exists",
+                hash = request.TorrentHash,
+                alreadyExists = true
+            });
+        }
+
         var success = await _qbittorrentService.AddTorrentWithTrackingAsync(
             request.MagnetLink,
             request.TorrentHash,
@@ -163,16 +202,17 @@ public class MikanController : ControllerBase
             return StatusCode(500, new { message = "Failed to add torrent to qBittorrent" });
         }
 
-        using var scope = _serviceProvider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+        var manualSubscriptionId = await EnsureManualSubscriptionAsync(db);
 
         var download = new DownloadHistoryEntity
         {
+            SubscriptionId = manualSubscriptionId,
             TorrentUrl = request.MagnetLink,
             TorrentHash = request.TorrentHash,
             Title = request.Title,
             Status = DownloadStatus.Pending,
             Source = DownloadSource.Manual,
+            PublishedAt = DateTime.UtcNow,
             DiscoveredAt = DateTime.UtcNow,
             DownloadedAt = DateTime.UtcNow,
             Progress = 0
@@ -209,7 +249,9 @@ public class MikanController : ControllerBase
                     state = d.Status.ToString(),
                     progress = d.Progress,
                     downloadSpeed = d.DownloadSpeed,
-                    eta = d.Eta
+                    eta = d.Eta,
+                    numSeeds = d.NumSeeds,
+                    numLeechers = d.NumLeechers
                 })
                 .ToListAsync();
 
@@ -249,5 +291,61 @@ public class MikanController : ControllerBase
         }
 
         return filtered.OrderByDescending(i => i.PublishedAt).ToList();
+    }
+
+    private async Task<int> EnsureManualSubscriptionAsync(AnimeDbContext db)
+    {
+        var existing = await db.Subscriptions.FirstOrDefaultAsync(s =>
+            s.BangumiId == ManualSubscriptionBangumiId || s.Title == ManualSubscriptionTitle);
+
+        if (existing != null)
+        {
+            return existing.Id;
+        }
+
+        var now = DateTime.UtcNow;
+        var manualSubscription = new SubscriptionEntity
+        {
+            BangumiId = ManualSubscriptionBangumiId,
+            Title = ManualSubscriptionTitle,
+            MikanBangumiId = ManualSubscriptionMikanId,
+            IsEnabled = false,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+
+        db.Subscriptions.Add(manualSubscription);
+        await db.SaveChangesAsync();
+
+        return manualSubscription.Id;
+    }
+
+    private async Task TryCacheMikanBangumiIdAsync(int bangumiId, MikanSearchResult searchResult)
+    {
+        var defaultSeason = searchResult.Seasons.ElementAtOrDefault(searchResult.DefaultSeason)
+            ?? searchResult.Seasons.FirstOrDefault();
+
+        if (defaultSeason == null || string.IsNullOrWhiteSpace(defaultSeason.MikanBangumiId))
+        {
+            return;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+        var anime = await db.AnimeInfos.FirstOrDefaultAsync(a => a.BangumiId == bangumiId);
+
+        if (anime == null)
+        {
+            return;
+        }
+
+        if (anime.MikanBangumiId == defaultSeason.MikanBangumiId)
+        {
+            return;
+        }
+
+        anime.MikanBangumiId = defaultSeason.MikanBangumiId;
+        anime.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
     }
 }

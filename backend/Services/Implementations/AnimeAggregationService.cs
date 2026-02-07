@@ -398,7 +398,8 @@ public class AnimeAggregationService : IAnimeAggregationService
                 Bangumi = entity.UrlBangumi ?? $"https://bgm.tv/subject/{entity.BangumiId}",
                 Tmdb = entity.UrlTmdb ?? "",
                 Anilist = entity.UrlAnilist ?? ""
-            }
+            },
+            MikanBangumiId = entity.MikanBangumiId
         };
     }
 

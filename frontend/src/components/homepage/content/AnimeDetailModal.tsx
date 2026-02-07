@@ -1,16 +1,17 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import toast from 'react-hot-toast';
 import type { AnimeInfo } from "./AnimeInfoType";
 import { useAppStore } from "../../../stores/useAppStores";
-import { DownloadItem } from "./DownloadItem";
-import { LoadingSpinner } from "./LoadingSpinner";
-import { ErrorMessage } from "./ErrorMessage";
 import type { MikanSeasonInfo, ParsedRssItem } from "../../../types/mikan";
+import type { TorrentInfo } from "../../../types/mikan";
 import * as mikanApi from "../../../services/mikanApi";
 import { StarIcon } from "../../icon/StarIcon";
 import { CloseIcon } from "../../icon/CloseIcon";
 import { ExternalLinkIcon } from "../../icon/ExternalLinkIcon";
+import { DownloadItem } from "./DownloadItem";
+import { LoadingSpinner } from "./LoadingSpinner";
+import { ErrorMessage } from "./ErrorMessage";
 
 type AnimeDetailModalProps = {
   anime: AnimeInfo;
@@ -32,9 +33,11 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const [availableResolutions, setAvailableResolutions] = useState<string[]>(['all']);
   const [availableSubtitleTypes, setAvailableSubtitleTypes] = useState<string[]>(['all']);
   const [downloadStatus, setDownloadStatus] = useState<Map<string, boolean>>(new Map());
+  const [torrentInfo, setTorrentInfo] = useState<Map<string, TorrentInfo>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloadingItem, setDownloadingItem] = useState<string | null>(null);
+  const stopPollingRef = useRef<(() => void) | null>(null);
 
   // 根据语言选择标题和描述，fallback to jp_title if both ch/en are empty
   const primaryTitle = language === 'zh'
@@ -107,7 +110,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     try {
       setLoading(true);
       setError(null);
-      const result = await mikanApi.searchMikanAnime(searchTitle);
+      const result = await mikanApi.searchMikanAnime(searchTitle, anime.bangumi_id);
       console.log('📋 Search result:', result);
 
       if (!result || !result.seasons || result.seasons.length === 0) {
@@ -151,10 +154,14 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       setAvailableResolutions(['all', ...feed.availableResolutions]);
       setAvailableSubtitleTypes(['all', ...feed.availableSubtitleTypes]);
 
-      // Check download status
       const status = await mikanApi.checkDownloadStatus(feed.items);
       setDownloadStatus(status);
-      console.log(`✅ Found ${feed.items.length} torrent items`);
+
+      // Start progress polling
+      stopPollingRef.current?.();
+      stopPollingRef.current = mikanApi.startProgressPolling(5000, (progresses: Map<string, TorrentInfo>) => {
+        setTorrentInfo(progresses);
+      });
 
       // Cache in sessionStorage
       const cacheKey = `mikan-feed-${season.mikanBangumiId}`;
@@ -227,12 +234,20 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     }
   }, [open, anime, loadSeasons]);
 
-  // Load feed when season changes
+   // Load feed when season changes
   useEffect(() => {
     if (seasons.length > 0) {
       loadFeed();
     }
   }, [selectedSeasonIndex, seasons, loadFeed]);
+
+  // Stop progress polling when modal closes
+  useEffect(() => {
+    return () => {
+      stopPollingRef.current?.();
+      stopPollingRef.current = null;
+    };
+  }, [open]);
 
   // Filter items based on preferences
   const filteredItems = feedItems.filter(item => {
@@ -454,16 +469,17 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
             {/* 下载列表 */}
             {!loading && !error && filteredItems.length > 0 && (
               <div className="space-y-2 max-h-60 overflow-y-auto">
-                {filteredItems.map(item => (
-                  <DownloadItem
-                    key={item.torrentHash}
-                    item={item}
-                    isDownloaded={downloadStatus.get(item.torrentHash) || false}
-                    onDownload={handleDownload}
-                    onCopyMagnet={handleCopyMagnet}
-                    isDownloading={downloadingItem === item.torrentHash}
-                  />
-                ))}
+                 {filteredItems.map(item => (
+                   <DownloadItem
+                     key={item.torrentHash}
+                     item={item}
+                     torrentInfo={torrentInfo.get(item.torrentHash)}
+                     isDownloaded={downloadStatus.get(item.torrentHash) || false}
+                     onDownload={handleDownload}
+                     onCopyMagnet={handleCopyMagnet}
+                     isDownloading={downloadingItem === item.torrentHash}
+                   />
+                 ))}
               </div>
             )}
 

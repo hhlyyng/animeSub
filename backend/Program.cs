@@ -190,7 +190,13 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+    var loggerFactory = scope.ServiceProvider.GetRequiredService<ILoggerFactory>();
+
     db.Database.EnsureCreated();
+    backend.Data.DbSchemaPatcher.ApplyAsync(
+        db,
+        loggerFactory.CreateLogger("DbSchemaPatcher")).GetAwaiter().GetResult();
+
     Log.Information("Database initialized: {DbPath}", db.Database.GetConnectionString());
 }
 

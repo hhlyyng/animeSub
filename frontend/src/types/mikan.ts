@@ -1,7 +1,13 @@
-export type DownloadPreferences = {
-  resolution: '1080p' | '720p' | '4K' | 'all';
-  subgroup: string;
-  subtitleType: '简日内嵌' | '繁日' | '简体' | '繁体' | 'all';
+export interface TorrentInfo {
+  hash: string;
+  name: string;
+  size: number;
+  state: string;
+  progress: number;
+  downloadSpeed?: number;
+  eta?: number;
+  numSeeds?: number;
+  numLeechers?: number;
 }
 
 export interface MikanSeasonInfo {
@@ -37,9 +43,9 @@ export interface ParsedRssItem {
 }
 
 export interface DownloadPreferences {
-  resolution: '1080p' | '720p' | '4K' | 'all';
+  resolution: "1080p" | "720p" | "4K" | "all";
   subgroup: string;
-  subtitleType: '简日内嵌' | '繁日' | '简体' | '繁体' | 'all';
+  subtitleType: string;
 }
 
 export interface DownloadTorrentRequest {

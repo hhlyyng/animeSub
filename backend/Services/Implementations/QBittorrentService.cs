@@ -252,7 +252,14 @@ public class QBittorrentService : IQBittorrentService
     {
         var success = await AddTorrentAsync(torrentUrl, savePath: null, category: "anime");
 
-        _logger.LogInformation("Added torrent with tracking: Hash={Hash}, Source={Source}", torrentHash, source);
+        if (success)
+        {
+            _logger.LogInformation("Added torrent with tracking: Hash={Hash}, Source={Source}", torrentHash, source);
+        }
+        else
+        {
+            _logger.LogWarning("Failed to add torrent with tracking: Hash={Hash}, Source={Source}", torrentHash, source);
+        }
 
         return success;
     }

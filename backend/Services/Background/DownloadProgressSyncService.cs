@@ -61,28 +61,18 @@ public class DownloadProgressSyncService : BackgroundService
 
             if (existing != null)
             {
-                existing.Progress = qbTorrent.Progress;
+                var progressPercent = ToProgressPercent(qbTorrent.Progress);
+
+                existing.Progress = progressPercent;
                 existing.DownloadSpeed = qbTorrent.Dlspeed;
-                existing.Eta = qbTorrent.Dlspeed > 0
-                    ? (int?)((qbTorrent.Size * (1 - qbTorrent.Progress / 100)) / qbTorrent.Dlspeed)
-                    : null;
+                existing.Eta = CalculateEtaSeconds(qbTorrent.Size, progressPercent, qbTorrent.Dlspeed);
                 existing.NumSeeds = qbTorrent.NumSeeds;
                 existing.NumLeechers = qbTorrent.NumLeechs;
                 existing.SavePath = qbTorrent.SavePath;
                 existing.Category = qbTorrent.Category;
                 existing.LastSyncedAt = DateTime.UtcNow;
 
-                existing.Status = qbTorrent.State switch
-                {
-                    "downloading" => Data.Entities.DownloadStatus.Downloading,
-                    "pausedDL" => Data.Entities.DownloadStatus.Pending,
-                    "stalledDL" => Data.Entities.DownloadStatus.Pending,
-                    "uploading" => Data.Entities.DownloadStatus.Completed,
-                    "stalledUP" => Data.Entities.DownloadStatus.Completed,
-                    "queuedDL" => Data.Entities.DownloadStatus.Pending,
-                    "completed" when qbTorrent.Progress >= 100 => Data.Entities.DownloadStatus.Completed,
-                    _ => existing.Status
-                };
+                existing.Status = MapStateToStatus(qbTorrent.State, progressPercent, existing.Status);
 
                 syncedCount++;
             }
@@ -93,5 +83,52 @@ public class DownloadProgressSyncService : BackgroundService
             await dbContext.SaveChangesAsync();
             _logger.LogInformation("Synced progress for {Count} torrents", syncedCount);
         }
+    }
+
+    public static double ToProgressPercent(double rawProgress)
+    {
+        if (double.IsNaN(rawProgress) || double.IsInfinity(rawProgress))
+        {
+            return 0;
+        }
+
+        // qBittorrent API returns 0-1 in most versions; keep compatibility with 0-100 payloads.
+        var percent = rawProgress <= 1 ? rawProgress * 100 : rawProgress;
+        return Math.Round(Math.Clamp(percent, 0, 100), 2);
+    }
+
+    public static int? CalculateEtaSeconds(long sizeBytes, double progressPercent, long downloadSpeedBytesPerSecond)
+    {
+        if (sizeBytes <= 0 || downloadSpeedBytesPerSecond <= 0)
+        {
+            return null;
+        }
+
+        var remainingRatio = Math.Clamp(1 - (progressPercent / 100.0), 0, 1);
+        var remainingBytes = sizeBytes * remainingRatio;
+        return (int)Math.Max(0, Math.Ceiling(remainingBytes / downloadSpeedBytesPerSecond));
+    }
+
+    public static Data.Entities.DownloadStatus MapStateToStatus(
+        string? qbState,
+        double progressPercent,
+        Data.Entities.DownloadStatus currentStatus)
+    {
+        return qbState switch
+        {
+            "downloading" or "metaDL" or "forcedDL" or "allocating" or "checkingDL"
+                => Data.Entities.DownloadStatus.Downloading,
+
+            "pausedDL" or "stalledDL" or "queuedDL"
+                => progressPercent >= 99.9 ? Data.Entities.DownloadStatus.Completed : Data.Entities.DownloadStatus.Pending,
+
+            "uploading" or "stalledUP" or "queuedUP" or "forcedUP" or "checkingUP" or "completed"
+                => Data.Entities.DownloadStatus.Completed,
+
+            "error" or "missingFiles"
+                => Data.Entities.DownloadStatus.Failed,
+
+            _ => currentStatus
+        };
     }
 }
