@@ -1,15 +1,15 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent } from "react";
 import { createPortal } from "react-dom";
-import toast from 'react-hot-toast';
+import toast from "react-hot-toast";
 import type { AnimeInfo } from "./AnimeInfoType";
 import { useAppStore } from "../../../stores/useAppStores";
-import type { MikanSeasonInfo, ParsedRssItem } from "../../../types/mikan";
-import type { TorrentInfo } from "../../../types/mikan";
+import type { MikanSeasonInfo, ParsedRssItem, TorrentInfo } from "../../../types/mikan";
 import * as mikanApi from "../../../services/mikanApi";
 import { StarIcon } from "../../icon/StarIcon";
 import { CloseIcon } from "../../icon/CloseIcon";
 import { ExternalLinkIcon } from "../../icon/ExternalLinkIcon";
-import { DownloadItem } from "./DownloadItem";
+import { DownloadEpisodeGroup } from "./DownloadEpisodeGroup";
 import { LoadingSpinner } from "./LoadingSpinner";
 import { ErrorMessage } from "./ErrorMessage";
 
@@ -19,229 +19,487 @@ type AnimeDetailModalProps = {
   onClose: () => void;
 };
 
+type EpisodeGroup = {
+  type: "collection" | "episode" | "unknown";
+  episode: number | null;
+  items: ParsedRssItem[];
+};
+
+function parseSeasonNumber(text?: string | null): number | null {
+  if (!text) return null;
+
+  const patterns = [
+    /season\s*(\d+)/i,
+    /\bs\s*0?(\d+)\b/i,
+    /(\d+)(?:st|nd|rd|th)\s*season/i,
+    /\u7b2c\s*([0-9]+)\s*\u5b63/i,
+    /\u7b2c\s*([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]+)\s*\u5b63/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match?.[1]) continue;
+
+    const raw = match[1];
+    const numeric = Number.parseInt(raw, 10);
+    if (!Number.isNaN(numeric) && numeric > 0) return numeric;
+
+    const chineseMap: Record<string, number> = {
+      "\u4e00": 1,
+      "\u4e8c": 2,
+      "\u4e09": 3,
+      "\u56db": 4,
+      "\u4e94": 5,
+      "\u516d": 6,
+      "\u4e03": 7,
+      "\u516b": 8,
+      "\u4e5d": 9,
+      "\u5341": 10,
+    };
+    if (raw in chineseMap) return chineseMap[raw];
+  }
+
+  return null;
+}
+
+function detectExplicitSeason(anime: AnimeInfo): number | null {
+  return (
+    parseSeasonNumber(anime.ch_title) ??
+    parseSeasonNumber(anime.en_title) ??
+    parseSeasonNumber(anime.jp_title)
+  );
+}
+
+function uniqueSorted(values: Array<string | null | undefined>): string[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim() ?? "")
+        .filter((value) => value.length > 0)
+    )
+  ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
+function pickSeasonByNumber(seasons: MikanSeasonInfo[], expected: number): MikanSeasonInfo[] {
+  const matched = seasons.filter((season) => {
+    if (typeof season.seasonNumber === "number") {
+      return season.seasonNumber === expected;
+    }
+    return parseSeasonNumber(season.seasonName) === expected;
+  });
+
+  if (matched.length === 0) return [];
+  return matched.sort((a, b) => (b.year ?? 0) - (a.year ?? 0));
+}
+
+function groupItemsByEpisode(items: ParsedRssItem[]): EpisodeGroup[] {
+  const groups = new Map<string, EpisodeGroup>();
+
+  for (const item of items) {
+    const isCollection = item.isCollection === true;
+    const type = isCollection ? "collection" : item.episode !== null ? "episode" : "unknown";
+    const key = type === "episode" ? `ep-${item.episode}` : type;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.items.push(item);
+      continue;
+    }
+
+    groups.set(key, {
+      type,
+      episode: item.episode,
+      items: [item],
+    });
+  }
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      items: group.items.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()),
+    }))
+    .sort((a, b) => {
+      if (a.type === b.type) {
+        if (a.type === "episode" && a.episode !== null && b.episode !== null) {
+          return b.episode - a.episode;
+        }
+        return 0;
+      }
+
+      if (a.type === "collection") return -1;
+      if (b.type === "collection") return 1;
+      if (a.type === "episode" && b.type === "unknown") return -1;
+      if (a.type === "unknown" && b.type === "episode") return 1;
+
+      return 0;
+    });
+}
+
 export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps) {
   const language = useAppStore((state) => state.language);
   const downloadPreferences = useAppStore((state) => state.downloadPreferences);
   const setDownloadPreferences = useAppStore((state) => state.setDownloadPreferences);
   const setDownloadLoading = useAppStore((state) => state.setDownloadLoading);
 
-  // Download state
   const [seasons, setSeasons] = useState<MikanSeasonInfo[]>([]);
   const [selectedSeasonIndex, setSelectedSeasonIndex] = useState(0);
   const [feedItems, setFeedItems] = useState<ParsedRssItem[]>([]);
-  const [availableSubgroups, setAvailableSubgroups] = useState<string[]>(['all']);
-  const [availableResolutions, setAvailableResolutions] = useState<string[]>(['all']);
-  const [availableSubtitleTypes, setAvailableSubtitleTypes] = useState<string[]>(['all']);
+  const [latestEpisode, setLatestEpisode] = useState<number | null>(null);
+  const [latestPublishedAt, setLatestPublishedAt] = useState<string | null>(null);
   const [downloadStatus, setDownloadStatus] = useState<Map<string, boolean>>(new Map());
   const [torrentInfo, setTorrentInfo] = useState<Map<string, TorrentInfo>>(new Map());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [downloadingItem, setDownloadingItem] = useState<string | null>(null);
+  const [busyHash, setBusyHash] = useState<string | null>(null);
   const stopPollingRef = useRef<(() => void) | null>(null);
 
-  // 根据语言选择标题和描述，fallback to jp_title if both ch/en are empty
-  const primaryTitle = language === 'zh'
-    ? (anime.ch_title || anime.en_title || anime.jp_title || 'Unknown Title')
-    : (anime.en_title || anime.ch_title || anime.jp_title || 'Unknown Title');
+  const explicitSeasonNumber = useMemo(() => detectExplicitSeason(anime), [anime]);
+  const shouldShowSeasonSelector = explicitSeasonNumber === null && seasons.length > 1;
 
-  // Only show secondary title if it's different from primary
+  const primaryTitle =
+    language === "zh"
+      ? anime.ch_title || anime.en_title || anime.jp_title || "Unknown Title"
+      : anime.en_title || anime.ch_title || anime.jp_title || "Unknown Title";
+
   const secondaryTitle = anime.jp_title !== primaryTitle ? anime.jp_title : null;
 
-  // Check for non-empty descriptions (handle empty strings)
-  const hasChDesc = anime.ch_desc && anime.ch_desc.trim().length > 0;
-  const hasEnDesc = anime.en_desc && anime.en_desc.trim().length > 0;
+  const hasChDesc = Boolean(anime.ch_desc && anime.ch_desc.trim().length > 0);
+  const hasEnDesc = Boolean(anime.en_desc && anime.en_desc.trim().length > 0);
 
-  const description = language === 'zh'
-    ? (hasChDesc ? anime.ch_desc : (hasEnDesc ? anime.en_desc : '暂无描述'))
-    : (hasEnDesc ? anime.en_desc : (hasChDesc ? anime.ch_desc : 'No description available'));
+  const description =
+    language === "zh"
+      ? hasChDesc
+        ? anime.ch_desc
+        : hasEnDesc
+          ? anime.en_desc
+          : "\u6682\u65e0\u63cf\u8ff0"
+      : hasEnDesc
+        ? anime.en_desc
+        : hasChDesc
+          ? anime.ch_desc
+          : "No description available";
 
-  const descriptionLabel = language === 'zh' ? '简介' : 'Synopsis';
-  const linksLabel = language === 'zh' ? '相关链接' : 'Links';
-  const downloadLabel = language === 'zh' ? '下载源' : 'Download Sources';
-  const noDownloadLabel = language === 'zh' ? '暂无可用下载源' : 'No download sources available';
-  const seasonLabel = language === 'zh' ? '季度' : 'Season';
-  const resolutionLabel = language === 'zh' ? '分辨率' : 'Resolution';
-  const subgroupLabel = language === 'zh' ? '字幕组' : 'Subgroup';
-  const subtitleLabel = language === 'zh' ? '字幕' : 'Subtitle';
-  const allLabel = language === 'zh' ? '全部' : 'All';
+  const descriptionLabel = language === "zh" ? "\u7b80\u4ecb" : "Synopsis";
+  const linksLabel = language === "zh" ? "\u76f8\u5173\u94fe\u63a5" : "Links";
+  const downloadLabel = language === "zh" ? "\u4e0b\u8f7d\u6e90" : "Download Sources";
+  const noDownloadLabel = language === "zh" ? "\u6682\u65e0\u53ef\u7528\u4e0b\u8f7d\u6e90" : "No download sources available";
+  const latestEpisodeLabel = language === "zh" ? "\u6700\u65b0\u66f4\u65b0" : "Latest update";
+  const seasonLabel = language === "zh" ? "\u5b63\u5ea6" : "Season";
+  const resolutionLabel = language === "zh" ? "\u5206\u8fa8\u7387" : "Resolution";
+  const subgroupLabel = language === "zh" ? "\u5b57\u5e55\u7ec4" : "Subgroup";
+  const subtitleLabel = language === "zh" ? "\u5b57\u5e55" : "Subtitle";
+  const allLabel = language === "zh" ? "\u5168\u90e8" : "All";
 
   const loadSeasons = useCallback(async () => {
-    console.log('=== Loading seasons for anime ===', anime);
-    console.log('Title options - ch_title:', anime.ch_title, 'en_title:', anime.en_title, 'jp_title:', anime.jp_title);
-    console.log('Cached mikan_bangumi_id:', anime.mikan_bangumi_id);
-
-    // If we already have MikanBangumiId from database, use it directly
     if (anime.mikan_bangumi_id) {
-      console.log('✅ Using cached Mikan Bangumi ID:', anime.mikan_bangumi_id);
-
-      try {
-        setLoading(true);
-        setError(null);
-
-        const season = {
-          seasonName: "Season 1",
+      setSeasons([
+        {
+          seasonName: "Season",
           mikanBangumiId: anime.mikan_bangumi_id,
-          year: 0
-        };
-
-        setSeasons([season]);
-        setSelectedSeasonIndex(0);
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Failed to load seasons';
-        setError(errorMessage);
-        console.error('❌ Error loading seasons:', err);
-      } finally {
-        setLoading(false);
-      }
+          year: 0,
+          seasonNumber: explicitSeasonNumber ?? undefined,
+        },
+      ]);
+      setSelectedSeasonIndex(0);
       return;
     }
 
-    // Try Chinese title first (best match rate), then English, then Japanese
     const searchTitle = anime.ch_title || anime.en_title || anime.jp_title;
-
     if (!searchTitle) {
-      console.error('❌ No title available for search');
-      setError(language === 'zh' ? '没有可搜索的标题' : 'No title available for search');
+      setError(language === "zh" ? "\u6ca1\u6709\u53ef\u641c\u7d22\u7684\u6807\u9898" : "No title available for search");
       return;
     }
-
-    console.log('🔍 Searching Mikan with title:', searchTitle);
 
     try {
       setLoading(true);
       setError(null);
-      const result = await mikanApi.searchMikanAnime(searchTitle, anime.bangumi_id);
-      console.log('📋 Search result:', result);
 
-      if (!result || !result.seasons || result.seasons.length === 0) {
-        console.warn('⚠️ No seasons found in search result');
-        setError(language === 'zh' ? '未找到匹配的动画' : 'No matching anime found');
+      const result = await mikanApi.searchMikanAnime(searchTitle, anime.bangumi_id, explicitSeasonNumber ?? undefined);
+      if (!result?.seasons?.length) {
+        setError(language === "zh" ? "\u672a\u627e\u5230\u5339\u914d\u7684\u52a8\u753b" : "No matching anime found");
         return;
       }
 
-      setSeasons(result.seasons);
-      setSelectedSeasonIndex(result.defaultSeason);
-      console.log(`✅ Loaded ${result.seasons.length} seasons`);
+      let finalSeasons = result.seasons;
+      let finalIndex = Math.min(Math.max(result.defaultSeason ?? 0, 0), result.seasons.length - 1);
+
+      if (explicitSeasonNumber !== null) {
+        const matched = pickSeasonByNumber(result.seasons, explicitSeasonNumber);
+        if (matched.length > 0) {
+          finalSeasons = [matched[0]];
+          finalIndex = 0;
+        } else {
+          finalSeasons = [result.seasons[finalIndex]];
+          finalIndex = 0;
+        }
+      }
+
+      setSeasons(finalSeasons);
+      setSelectedSeasonIndex(finalIndex);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to search';
+      const errorMessage = err instanceof Error ? err.message : "Failed to search";
       setError(errorMessage);
-      console.error('❌ Error searching seasons:', err);
     } finally {
       setLoading(false);
     }
-  }, [anime, language]);
+  }, [anime, explicitSeasonNumber, language]);
 
   const loadFeed = useCallback(async () => {
-    if (seasons.length === 0) {
-      console.warn('⚠️ No seasons available, cannot load feed');
-      return;
-    }
+    if (seasons.length === 0) return;
 
     const season = seasons[selectedSeasonIndex];
-    console.log('=== Loading RSS feed ===');
-    console.log('Selected season:', season);
-    console.log('MikanBangumiId:', season.mikanBangumiId);
+    if (!season) return;
 
     try {
       setLoading(true);
       setError(null);
 
-      const feed = await mikanApi.getMikanFeed(season.mikanBangumiId);
-      console.log('📋 Feed loaded:', feed);
-
+      const feed = await mikanApi.getMikanFeed(season.mikanBangumiId, anime.bangumi_id);
       setFeedItems(feed.items);
-      setAvailableSubgroups(['all', ...feed.availableSubgroups]);
-      setAvailableResolutions(['all', ...feed.availableResolutions]);
-      setAvailableSubtitleTypes(['all', ...feed.availableSubtitleTypes]);
+      setLatestEpisode(feed.latestEpisode ?? null);
+      setLatestPublishedAt(feed.latestPublishedAt ?? null);
+
+      // Keep cross-anime preference for resolution, reset scoped filters to avoid stale invalid options.
+      setDownloadPreferences({ subgroup: "all", subtitleType: "all" });
 
       const status = await mikanApi.checkDownloadStatus(feed.items);
       setDownloadStatus(status);
 
-      // Start progress polling
       stopPollingRef.current?.();
       stopPollingRef.current = mikanApi.startProgressPolling(5000, (progresses: Map<string, TorrentInfo>) => {
         setTorrentInfo(progresses);
       });
-
-      // Cache in sessionStorage
-      const cacheKey = `mikan-feed-${season.mikanBangumiId}`;
-      try {
-        sessionStorage.setItem(cacheKey, JSON.stringify(feed));
-        console.log('💾 Feed cached:', cacheKey);
-      } catch (e) {
-        console.warn('Failed to cache feed:', e);
-      }
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to load feed';
+      const errorMessage = err instanceof Error ? err.message : "Failed to load feed";
       setError(errorMessage);
-      console.error('❌ Error loading feed:', err);
     } finally {
       setLoading(false);
     }
-  }, [seasons, selectedSeasonIndex]);
+  }, [anime.bangumi_id, seasons, selectedSeasonIndex, setDownloadPreferences]);
 
-  const handleDownload = async (item: ParsedRssItem) => {
+  const resolutionOptions = useMemo(() => uniqueSorted(feedItems.map((item) => item.resolution)), [feedItems]);
+
+  const subgroupOptions = useMemo(() => {
+    const candidateItems = feedItems.filter((item) => {
+      if (downloadPreferences.resolution !== "all" && item.resolution !== downloadPreferences.resolution) {
+        return false;
+      }
+      if (downloadPreferences.subtitleType !== "all" && item.subtitleType !== downloadPreferences.subtitleType) {
+        return false;
+      }
+      return true;
+    });
+    return uniqueSorted(candidateItems.map((item) => item.subgroup));
+  }, [feedItems, downloadPreferences.resolution, downloadPreferences.subtitleType]);
+
+  const subtitleTypeOptions = useMemo(() => {
+    const candidateItems = feedItems.filter((item) => {
+      if (downloadPreferences.resolution !== "all" && item.resolution !== downloadPreferences.resolution) {
+        return false;
+      }
+      if (downloadPreferences.subgroup !== "all" && item.subgroup !== downloadPreferences.subgroup) {
+        return false;
+      }
+      return true;
+    });
+    return uniqueSorted(candidateItems.map((item) => item.subtitleType));
+  }, [feedItems, downloadPreferences.resolution, downloadPreferences.subgroup]);
+
+  useEffect(() => {
+    const nextPreferences: Partial<typeof downloadPreferences> = {};
+
+    if (
+      downloadPreferences.resolution !== "all" &&
+      !resolutionOptions.includes(downloadPreferences.resolution)
+    ) {
+      nextPreferences.resolution = "all";
+    }
+
+    if (
+      downloadPreferences.subgroup !== "all" &&
+      !subgroupOptions.includes(downloadPreferences.subgroup)
+    ) {
+      nextPreferences.subgroup = "all";
+    }
+
+    if (
+      downloadPreferences.subtitleType !== "all" &&
+      !subtitleTypeOptions.includes(downloadPreferences.subtitleType)
+    ) {
+      nextPreferences.subtitleType = "all";
+    }
+
+    if (Object.keys(nextPreferences).length > 0) {
+      setDownloadPreferences(nextPreferences);
+    }
+  }, [
+    downloadPreferences.resolution,
+    downloadPreferences.subgroup,
+    downloadPreferences.subtitleType,
+    resolutionOptions,
+    subgroupOptions,
+    subtitleTypeOptions,
+    setDownloadPreferences,
+  ]);
+
+  const filteredItems = useMemo(
+    () =>
+      feedItems.filter((item) => {
+        if (downloadPreferences.resolution !== "all" && item.resolution !== downloadPreferences.resolution) {
+          return false;
+        }
+        if (downloadPreferences.subgroup !== "all" && item.subgroup !== downloadPreferences.subgroup) {
+          return false;
+        }
+        if (downloadPreferences.subtitleType !== "all" && item.subtitleType !== downloadPreferences.subtitleType) {
+          return false;
+        }
+        return true;
+      }),
+    [feedItems, downloadPreferences]
+  );
+
+  const episodeGroups = useMemo(() => groupItemsByEpisode(filteredItems), [filteredItems]);
+
+  const markTorrentState = useCallback((hash: string, patch: Partial<TorrentInfo>) => {
+    setTorrentInfo((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(hash);
+      if (!existing) return prev;
+      next.set(hash, { ...existing, ...patch });
+      return next;
+    });
+  }, []);
+
+  const handleDownload = useCallback(
+    async (item: ParsedRssItem) => {
+      if (item.canDownload === false) {
+        toast.error(language === "zh" ? "\u8d44\u6e90 hash \u7f3a\u5931\uff0c\u65e0\u6cd5\u4e0b\u8f7d" : "Torrent hash is missing, cannot download");
+        return;
+      }
+
+      try {
+        const requestHash = item.torrentHash?.trim().toUpperCase() ?? "";
+        if (requestHash.length > 0) {
+          setBusyHash(requestHash);
+        }
+        setDownloadLoading(true);
+
+        const qbHash = await mikanApi.downloadTorrent({
+          magnetLink: item.magnetLink,
+          torrentUrl: item.torrentUrl,
+          title: item.title,
+          torrentHash: requestHash,
+        });
+        const effectiveHash = qbHash.trim().toUpperCase();
+        if (effectiveHash.length === 0) {
+          throw new Error("Missing normalized hash from backend response");
+        }
+
+        setDownloadStatus((prev) => {
+          const next = new Map(prev);
+          next.set(effectiveHash, true);
+          return next;
+        });
+
+        setTorrentInfo((prev) => {
+          if (prev.has(effectiveHash)) return prev;
+          const next = new Map(prev);
+          next.set(effectiveHash, {
+            hash: effectiveHash,
+            name: item.title,
+            size: 0,
+            state: "downloading",
+            progress: 0,
+          });
+          return next;
+        });
+
+        toast.success(language === "zh" ? "\u4e0b\u8f7d\u6210\u529f" : "Downloaded successfully");
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : "Failed to download";
+        toast.error(language === "zh" ? `\u4e0b\u8f7d\u5931\u8d25: ${errorMsg}` : `Download failed: ${errorMsg}`);
+      } finally {
+        setBusyHash(null);
+        setDownloadLoading(false);
+      }
+    },
+    [language, setDownloadLoading]
+  );
+
+  const handlePause = useCallback(async (hash: string) => {
     try {
-      setDownloadingItem(item.torrentHash);
-      setDownloadLoading(true);
+      setBusyHash(hash);
+      await mikanApi.pauseTorrent(hash);
+      markTorrentState(hash, { state: "pausedDL" });
+      toast.success(language === "zh" ? "\u5df2\u6682\u505c\u4e0b\u8f7d" : "Download paused");
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to pause torrent";
+      toast.error(language === "zh" ? `\u6682\u505c\u5931\u8d25: ${errorMsg}` : `Pause failed: ${errorMsg}`);
+    } finally {
+      setBusyHash(null);
+    }
+  }, [language, markTorrentState]);
 
-      await mikanApi.downloadTorrent({
-        magnetLink: item.magnetLink,
-        torrentUrl: item.torrentUrl,
-        title: item.title,
-        torrentHash: item.torrentHash
+  const handleResume = useCallback(async (hash: string) => {
+    try {
+      setBusyHash(hash);
+      await mikanApi.resumeTorrent(hash);
+      markTorrentState(hash, { state: "downloading" });
+      toast.success(language === "zh" ? "\u5df2\u7ee7\u7eed\u4e0b\u8f7d" : "Download resumed");
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to resume torrent";
+      toast.error(language === "zh" ? `\u7ee7\u7eed\u5931\u8d25: ${errorMsg}` : `Resume failed: ${errorMsg}`);
+    } finally {
+      setBusyHash(null);
+    }
+  }, [language, markTorrentState]);
+
+  const handleRemove = useCallback(async (hash: string) => {
+    try {
+      setBusyHash(hash);
+      await mikanApi.removeTorrent(hash, false);
+
+      setTorrentInfo((prev) => {
+        const next = new Map(prev);
+        next.delete(hash);
+        return next;
       });
 
-      // Update download status
-      const newStatus = new Map(downloadStatus);
-      newStatus.set(item.torrentHash, true);
-      setDownloadStatus(newStatus);
+      setDownloadStatus((prev) => {
+        const next = new Map(prev);
+        next.set(hash, false);
+        return next;
+      });
 
-      toast.success(language === 'zh' ? '下载成功' : 'Downloaded successfully');
+      toast.success(language === "zh" ? "\u4e0b\u8f7d\u8bb0\u5f55\u5df2\u79fb\u9664" : "Download removed");
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to download';
-      toast.error(language === 'zh' ? `下载失败: ${errorMsg}` : `Download failed: ${errorMsg}`);
-      console.error('Error downloading:', err);
+      const errorMsg = err instanceof Error ? err.message : "Failed to remove torrent";
+      toast.error(language === "zh" ? `\u79fb\u9664\u5931\u8d25: ${errorMsg}` : `Remove failed: ${errorMsg}`);
     } finally {
-      setDownloadingItem(null);
-      setDownloadLoading(false);
+      setBusyHash(null);
     }
-  };
+  }, [language]);
 
-  const handleCopyMagnet = async (magnetLink: string) => {
-    try {
-      await navigator.clipboard.writeText(magnetLink);
-      toast.success(language === 'zh' ? '磁力链接已复制' : 'Magnet link copied');
-    } catch (err) {
-      toast.error(language === 'zh' ? '复制失败' : 'Failed to copy');
-      console.error('Error copying:', err);
-    }
-  };
-
-  const handleSeasonChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setSelectedSeasonIndex(parseInt(e.target.value));
+  const handleSeasonChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    setSelectedSeasonIndex(Number.parseInt(event.target.value, 10));
   };
 
   const handlePreferenceChange = (key: keyof typeof downloadPreferences, value: string) => {
     setDownloadPreferences({ [key]: value });
   };
 
-  // Load seasons when modal opens
   useEffect(() => {
     if (open && anime.jp_title) {
-      console.log('Modal opened, anime:', anime);
-      loadSeasons();
+      void loadSeasons();
     }
   }, [open, anime, loadSeasons]);
 
-   // Load feed when season changes
   useEffect(() => {
     if (seasons.length > 0) {
-      loadFeed();
+      void loadFeed();
     }
-  }, [selectedSeasonIndex, seasons, loadFeed]);
+  }, [seasons, selectedSeasonIndex, loadFeed]);
 
-  // Stop progress polling when modal closes
   useEffect(() => {
     return () => {
       stopPollingRef.current?.();
@@ -249,31 +507,13 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     };
   }, [open]);
 
-  // Filter items based on preferences
-  const filteredItems = feedItems.filter(item => {
-    if (downloadPreferences.resolution !== 'all' && item.resolution !== downloadPreferences.resolution) {
-      return false;
-    }
-    if (downloadPreferences.subgroup !== 'all' && item.subgroup !== downloadPreferences.subgroup) {
-      return false;
-    }
-    if (downloadPreferences.subtitleType !== 'all' && item.subtitleType !== downloadPreferences.subtitleType) {
-      return false;
-    }
-    return true;
-  });
-
-  // 按 ESC 键关闭
   useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-      }
+    const handleEsc = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
     };
 
     if (open) {
       document.addEventListener("keydown", handleEsc);
-      // 禁止背景滚动
       document.body.style.overflow = "hidden";
     }
 
@@ -285,41 +525,31 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
   if (!open) return null;
 
+  const latestText =
+    latestEpisode !== null
+      ? `EP ${latestEpisode}`
+      : latestPublishedAt
+        ? new Date(latestPublishedAt).toLocaleString()
+        : null;
+
   const modalContent = (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      {/* 背景遮罩 - 无 blur */}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50" />
 
-      {/* Modal 内容 */}
       <div
         className="relative z-10 w-full max-w-3xl bg-white rounded-lg shadow-2xl overflow-hidden animate-fadeIn"
-        onClick={(e) => e.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
       >
-        {/* 右上角固定区域：分数 + 关闭按钮 */}
-        <div
-          className="absolute flex items-center gap-3"
-          style={{ top: '1rem', right: '1rem', zIndex: 20 }}
-        >
-          {/* 分数 */}
+        <div className="absolute flex items-center gap-3" style={{ top: "1rem", right: "1rem", zIndex: 20 }}>
           <div className="flex-shrink-0 inline-flex items-center px-2.5 py-0.5 bg-yellow-100 rounded-full">
             <StarIcon />
-            <span className="text-sm font-semibold text-gray-900">
-              {anime.score || 'N/A'}
-            </span>
+            <span className="text-sm font-semibold text-gray-900">{anime.score || "N/A"}</span>
           </div>
 
-          {/* 关闭按钮 */}
           <button
             onClick={onClose}
             className="group"
-            style={{
-              all: 'unset',
-              padding: '0.25rem',
-              cursor: 'pointer',
-            }}
+            style={{ all: "unset", padding: "0.25rem", cursor: "pointer" }}
             aria-label="Close"
           >
             <CloseIcon />
@@ -327,30 +557,21 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         </div>
 
         <div className="flex flex-col max-h-[90vh]">
-          {/* 上半部分: 信息区 */}
           <div className="flex pt-4 px-6 pb-6 gap-6">
-            {/* 左: 图片 */}
             <div className="w-48 flex-shrink-0">
               <img
-                src={anime.images?.portrait || ''}
+                src={anime.images?.portrait || ""}
                 alt={primaryTitle}
                 className="w-full h-auto rounded-lg object-cover shadow-md"
               />
             </div>
 
-            {/* 右: 标题+描述+链接 */}
             <div className="flex-1 flex flex-col min-w-0">
-              {/* 标题 */}
               <div className="mb-4 pr-24">
-                <h2 className="text-2xl font-bold text-gray-900 mb-1">
-                  {primaryTitle}
-                </h2>
-                {secondaryTitle && (
-                  <p className="text-sm text-gray-500">{secondaryTitle}</p>
-                )}
+                <h2 className="text-2xl font-bold text-gray-900 mb-1">{primaryTitle}</h2>
+                {secondaryTitle && <p className="text-sm text-gray-500">{secondaryTitle}</p>}
               </div>
 
-              {/* 描述 */}
               <div className="mb-4 flex-1 overflow-y-auto">
                 <h3 className="text-sm font-semibold text-gray-700 mb-2">{descriptionLabel}</h3>
                 <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto">
@@ -358,7 +579,6 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                 </p>
               </div>
 
-              {/* 外部链接 */}
               <div>
                 <h3 className="text-sm font-semibold text-gray-700 mb-2">{linksLabel}</h3>
                 <div className="flex flex-wrap gap-2">
@@ -400,18 +620,20 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
             </div>
           </div>
 
-          {/* 下半部分: 下载源 */}
           <div className="border-t border-gray-200 p-6 bg-gray-50">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">{downloadLabel}</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900">{downloadLabel}</h3>
+              {latestText && (
+                <p className="text-sm text-gray-600">
+                  {latestEpisodeLabel}: <span className="font-semibold text-gray-800">{latestText}</span>
+                </p>
+              )}
+            </div>
 
-            {/* Loading Spinner */}
             {loading && <LoadingSpinner />}
-
-            {/* Error Message */}
             {error && <ErrorMessage message={error} />}
 
-            {/* Season Selector */}
-            {!loading && !error && seasons.length > 0 && (
+            {!loading && !error && shouldShowSeasonSelector && (
               <div className="mb-4">
                 <label className="text-sm font-medium text-gray-700">{seasonLabel}</label>
                 <select
@@ -420,78 +642,90 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                   className="mt-1 block w-full rounded-md border-gray-300 py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                 >
                   {seasons.map((season, index) => (
-                    <option key={index} value={index}>
-                      {season.seasonName} ({season.year})
+                    <option key={`${season.mikanBangumiId}-${index}`} value={index}>
+                      {season.seasonName} {season.year ? `(${season.year})` : ""}
                     </option>
                   ))}
                 </select>
               </div>
             )}
 
-            {/* 筛选下拉栏 */}
             {!loading && !error && filteredItems.length > 0 && (
               <div className="flex gap-3 mb-4 flex-wrap">
                 <select
                   value={downloadPreferences.resolution}
-                  onChange={(e) => handlePreferenceChange('resolution', e.target.value)}
+                  onChange={(event) => handlePreferenceChange("resolution", event.target.value)}
                   className="rounded-md border-gray-300 py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                 >
                   <option value="all">{resolutionLabel}: {allLabel}</option>
-                  {availableResolutions.slice(1).map(res => (
-                    <option key={res} value={res}>{res}</option>
+                  {resolutionOptions.map((resolution) => (
+                    <option key={resolution} value={resolution}>
+                      {resolution}
+                    </option>
                   ))}
                 </select>
 
                 <select
                   value={downloadPreferences.subgroup}
-                  onChange={(e) => handlePreferenceChange('subgroup', e.target.value)}
+                  onChange={(event) => handlePreferenceChange("subgroup", event.target.value)}
                   className="rounded-md border-gray-300 py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                 >
                   <option value="all">{subgroupLabel}: {allLabel}</option>
-                  {availableSubgroups.slice(1).map(sub => (
-                    <option key={sub} value={sub}>{sub}</option>
+                  {subgroupOptions.map((subgroup) => (
+                    <option key={subgroup} value={subgroup}>
+                      {subgroup}
+                    </option>
                   ))}
                 </select>
 
                 <select
                   value={downloadPreferences.subtitleType}
-                  onChange={(e) => handlePreferenceChange('subtitleType', e.target.value)}
+                  onChange={(event) => handlePreferenceChange("subtitleType", event.target.value)}
                   className="rounded-md border-gray-300 py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                 >
                   <option value="all">{subtitleLabel}: {allLabel}</option>
-                  {availableSubtitleTypes.slice(1).map(type => (
-                    <option key={type} value={type}>{type}</option>
+                  {subtitleTypeOptions.map((subtitleType) => (
+                    <option key={subtitleType} value={subtitleType}>
+                      {subtitleType}
+                    </option>
                   ))}
                 </select>
               </div>
             )}
 
-            {/* 下载列表 */}
             {!loading && !error && filteredItems.length > 0 && (
-              <div className="space-y-2 max-h-60 overflow-y-auto">
-                 {filteredItems.map(item => (
-                   <DownloadItem
-                     key={item.torrentHash}
-                     item={item}
-                     torrentInfo={torrentInfo.get(item.torrentHash)}
-                     isDownloaded={downloadStatus.get(item.torrentHash) || false}
-                     onDownload={handleDownload}
-                     onCopyMagnet={handleCopyMagnet}
-                     isDownloading={downloadingItem === item.torrentHash}
-                   />
-                 ))}
+              <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                {episodeGroups.map((group) => (
+                  <DownloadEpisodeGroup
+                    key={
+                      group.type === "collection"
+                        ? "ep-collection"
+                        : group.episode === null
+                          ? "ep-unknown"
+                          : `ep-${group.episode}`
+                    }
+                    episode={group.episode}
+                    isCollectionGroup={group.type === "collection"}
+                    items={group.items}
+                    downloadStatus={downloadStatus}
+                    torrentInfo={torrentInfo}
+                    busyHash={busyHash}
+                    onDownload={handleDownload}
+                    onPause={handlePause}
+                    onResume={handleResume}
+                    onRemove={handleRemove}
+                  />
+                ))}
               </div>
             )}
 
-            {/* No items message */}
             {!loading && !error && filteredItems.length === 0 && feedItems.length === 0 && (
               <p className="text-gray-500">{noDownloadLabel}</p>
             )}
 
-            {/* No filter results message */}
             {!loading && !error && filteredItems.length === 0 && feedItems.length > 0 && (
               <p className="text-gray-500">
-                {language === 'zh' ? '没有符合条件的下载源' : 'No matching download sources'}
+                {language === "zh" ? "\u6ca1\u6709\u7b26\u5408\u6761\u4ef6\u7684\u4e0b\u8f7d\u6e90" : "No matching download sources"}
               </p>
             )}
           </div>
