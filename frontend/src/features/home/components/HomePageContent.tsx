@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import AnimeFlow from "./AnimeInfoFlow";
 import type { AnimeInfo } from "../../../types/anime";
 import { useAppStore } from "../../../stores/useAppStores";
+import { API_BASE_URL } from "../../../config/env";
 
 const CACHE_KEYS = {
     todayAnimes: 'todayAnimes',
@@ -10,7 +11,7 @@ const CACHE_KEYS = {
     malTop10: 'malTop10'
 };
 
-const API_BASE = 'http://localhost:5072/api/anime';
+const API_BASE = `${API_BASE_URL}/anime`;
 
 // Preload images in background for smoother UX
 const preloadImages = (animes: AnimeInfo[]) => {
@@ -51,8 +52,7 @@ const HomeContent = () => {
     // 通用的获取数据函数
     const fetchAnimeData = async (
         endpoint: string,
-        cacheKey: string,
-        needsToken: boolean = false
+        cacheKey: string
     ): Promise<AnimeInfo[]> => {
         // 尝试从缓存读取
         const cached = sessionStorage.getItem(cacheKey);
@@ -66,18 +66,8 @@ const HomeContent = () => {
         }
 
         // 从 API 获取
-        const headers: HeadersInit = {
-            'Content-Type': 'application/json'
-        };
-
-        if (needsToken) {
-            headers['X-Bangumi-Token'] = 'KCph7wQKkv5DAtOeznpzFCDo3eaNkQrMqotnvyEX';
-            headers['X-TMDB-Token'] = 'REMOVED';
-        }
-
         const response = await fetch(`${API_BASE}${endpoint}`, {
-            method: 'GET',
-            headers
+            method: 'GET'
         });
 
         if (!response.ok) {
@@ -103,10 +93,10 @@ const HomeContent = () => {
 
                 // 并行获取所有数据 (all endpoints need TMDB token for backdrop URLs)
                 const [today, bangumi, anilist, mal] = await Promise.all([
-                    fetchAnimeData('/today', CACHE_KEYS.todayAnimes, true),
-                    fetchAnimeData('/top/bangumi', CACHE_KEYS.bangumiTop10, true),
-                    fetchAnimeData('/top/anilist', CACHE_KEYS.anilistTop10, true),
-                    fetchAnimeData('/top/mal', CACHE_KEYS.malTop10, true)
+                    fetchAnimeData('/today', CACHE_KEYS.todayAnimes),
+                    fetchAnimeData('/top/bangumi', CACHE_KEYS.bangumiTop10),
+                    fetchAnimeData('/top/anilist', CACHE_KEYS.anilistTop10),
+                    fetchAnimeData('/top/mal', CACHE_KEYS.malTop10)
                 ]);
 
                 setTodayAnimes(today);

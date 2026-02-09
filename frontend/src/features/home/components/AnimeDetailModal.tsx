@@ -6,13 +6,13 @@ import type { AnimeInfo } from "../../../types/anime";
 import { useAppStore } from "../../../stores/useAppStores";
 import type { MikanSeasonInfo, ParsedRssItem, TorrentInfo } from "../../../types/mikan";
 import * as mikanApi from "../../../services/mikanApi";
-import { StarIcon } from "../../icons/StarIcon";
-import { CloseIcon } from "../../icons/CloseIcon";
-import { ExternalLinkIcon } from "../../icons/ExternalLinkIcon";
+import { StarIcon } from "../../../components/icons/StarIcon";
+import { CloseIcon } from "../../../components/icons/CloseIcon";
+import { ExternalLinkIcon } from "../../../components/icons/ExternalLinkIcon";
 import { DownloadEpisodeGroup } from "./DownloadEpisodeGroup";
 import type { DownloadActionState } from "./DownloadActionButton";
-import { LoadingSpinner } from "./LoadingSpinner";
-import { ErrorMessage } from "./ErrorMessage";
+import { LoadingSpinner } from "../../../components/common/LoadingSpinner";
+import { ErrorMessage } from "../../../components/common/ErrorMessage";
 
 type AnimeDetailModalProps = {
   anime: AnimeInfo;

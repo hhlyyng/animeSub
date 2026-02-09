@@ -5,8 +5,9 @@ import type {
   ParsedRssItem,
   TorrentInfo,
 } from "../types/mikan";
+import { API_BASE_URL } from "../config/env";
 
-const API_BASE = "http://localhost:5072/api";
+const API_BASE = API_BASE_URL;
 
 async function resolveApiErrorMessage(response: Response, fallback: string): Promise<string> {
   try {
