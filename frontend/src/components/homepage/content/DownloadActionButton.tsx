@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import DownloadIcon from "../../icon/DownloadIcon";
+import PlayTriangleIcon from "../../icon/PlayTriangleIcon";
+import { CloseIcon } from "../../icon/CloseIcon";
 
 export type DownloadActionState = "idle" | "downloading" | "paused" | "completed";
 
@@ -8,6 +10,11 @@ type DownloadActionButtonProps = {
   progress: number;
   disabled?: boolean;
   onClick: () => void;
+  secondaryAction?: {
+    onClick: () => void;
+    disabled?: boolean;
+    ariaLabel?: string;
+  };
 };
 
 const RADIUS = 12;
@@ -32,15 +39,6 @@ function CheckIcon({ className }: { className?: string }) {
   );
 }
 
-function CloseIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className={className} stroke="currentColor" strokeWidth={2.5}>
-      <path d="M6 6l12 12" />
-      <path d="M18 6l-12 12" />
-    </svg>
-  );
-}
-
 function clampProgress(progress: number): number {
   if (Number.isNaN(progress)) return 0;
   if (progress < 0) return 0;
@@ -48,13 +46,21 @@ function clampProgress(progress: number): number {
   return progress;
 }
 
-export function DownloadActionButton({ state, progress, disabled = false, onClick }: DownloadActionButtonProps) {
+export function DownloadActionButton({
+  state,
+  progress,
+  disabled = false,
+  onClick,
+  secondaryAction,
+}: DownloadActionButtonProps) {
   const [isHovered, setIsHovered] = useState(false);
   const isIdle = state === "idle";
+  const canShowSecondary = state === "paused" && Boolean(secondaryAction);
+  const expandedWidth = SIZE * 2 + 6;
+  const secondaryDisabled = secondaryAction?.disabled ?? false;
 
   const visual = useMemo(() => {
     const normalizedProgress = clampProgress(progress);
-    const visibleDownloadingProgress = normalizedProgress <= 0 ? 6 : normalizedProgress;
 
     if (state === "completed") {
       return {
@@ -70,7 +76,7 @@ export function DownloadActionButton({ state, progress, disabled = false, onClic
       return {
         ringColor: "#16a34a",
         trackColor: "rgba(34,197,94,0.35)",
-        progress: visibleDownloadingProgress,
+        progress: normalizedProgress,
         icon: <PauseIcon className="block h-4 w-4" />,
         iconColor: "text-green-700",
       };
@@ -81,7 +87,7 @@ export function DownloadActionButton({ state, progress, disabled = false, onClic
         ringColor: "#4b5563",
         trackColor: "rgba(107,114,128,0.22)",
         progress: normalizedProgress,
-        icon: <PauseIcon className="block h-4 w-4" />,
+        icon: <PlayTriangleIcon className="block h-3.5 w-3.5" />,
         iconColor: "text-gray-700",
       };
     }
@@ -98,72 +104,108 @@ export function DownloadActionButton({ state, progress, disabled = false, onClic
   const dashOffset = CIRCUMFERENCE * (1 - visual.progress / 100);
 
   return (
-    <button
-      type="button"
+    <div
+      className="relative inline-flex items-center justify-end"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      onClick={onClick}
-      disabled={disabled}
-      className={`group relative ${disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
       style={{
-        appearance: "none",
-        border: "none",
-        background: "transparent",
-        outline: "none",
-        boxShadow: "none",
-        padding: 0,
-        margin: 0,
-        position: "relative",
-        width: SIZE,
+        width: canShowSecondary ? (isHovered ? expandedWidth : SIZE) : SIZE,
         height: SIZE,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
+        transition: canShowSecondary ? "width 220ms ease" : undefined,
       }}
     >
-      {!isIdle && (
-        <svg
-          className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-90"
-          width={SIZE}
-          height={SIZE}
-          viewBox={`0 0 ${SIZE} ${SIZE}`}
-          aria-hidden="true"
+      {canShowSecondary && secondaryAction && (
+        <button
+          type="button"
+          onClick={secondaryAction.onClick}
+          disabled={secondaryDisabled}
+          aria-label={secondaryAction.ariaLabel ?? "Remove torrent"}
+          className={`group absolute left-0 inline-flex h-8 w-8 items-center justify-center ${
+            secondaryDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+          }`}
+          style={{
+            appearance: "none",
+            border: "none",
+            background: "transparent",
+            outline: "none",
+            boxShadow: "none",
+            padding: 0,
+            margin: 0,
+            opacity: isHovered ? 1 : 0,
+            transform: isHovered ? "translateX(0)" : "translateX(-8px)",
+            pointerEvents: isHovered ? "auto" : "none",
+            transition: "opacity 220ms ease, transform 220ms ease",
+          }}
         >
-          <circle
-            cx={SIZE / 2}
-            cy={SIZE / 2}
-            r={RADIUS}
-            stroke={visual.trackColor}
-            strokeWidth={STROKE_WIDTH}
-            fill="transparent"
-          />
-          <circle
-            cx={SIZE / 2}
-            cy={SIZE / 2}
-            r={RADIUS}
-            stroke={visual.ringColor}
-            strokeWidth={STROKE_WIDTH}
-            fill="transparent"
-            strokeLinecap="round"
-            strokeDasharray={CIRCUMFERENCE}
-            strokeDashoffset={dashOffset}
-            style={{
-              transition: "stroke-dashoffset 320ms ease, stroke 220ms ease",
-            }}
-          />
-        </svg>
+          <CloseIcon className="h-4 w-4" />
+        </button>
       )}
 
-      <span
-        className={`relative inline-flex h-8 w-8 items-center justify-center leading-none transition-all duration-200 ${visual.iconColor} ${
-          isIdle
-            ? "group-hover:scale-110 group-hover:text-gray-900"
-            : "group-hover:scale-105"
-        }`}
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        className={`group relative ${disabled ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}
+        style={{
+          appearance: "none",
+          border: "none",
+          background: "transparent",
+          outline: "none",
+          boxShadow: "none",
+          padding: 0,
+          margin: 0,
+          position: "relative",
+          width: SIZE,
+          height: SIZE,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
       >
-        {visual.icon}
-      </span>
-    </button>
+        {!isIdle && (
+          <svg
+            className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-90"
+            width={SIZE}
+            height={SIZE}
+            viewBox={`0 0 ${SIZE} ${SIZE}`}
+            aria-hidden="true"
+          >
+            <circle
+              cx={SIZE / 2}
+              cy={SIZE / 2}
+              r={RADIUS}
+              stroke={visual.trackColor}
+              strokeWidth={STROKE_WIDTH}
+              fill="transparent"
+            />
+            <circle
+              cx={SIZE / 2}
+              cy={SIZE / 2}
+              r={RADIUS}
+              stroke={visual.ringColor}
+              strokeWidth={STROKE_WIDTH}
+              fill="transparent"
+              strokeLinecap="round"
+              strokeDasharray={CIRCUMFERENCE}
+              strokeDashoffset={dashOffset}
+              style={{
+                transition: "stroke-dashoffset 320ms ease, stroke 220ms ease",
+              }}
+            />
+          </svg>
+        )}
+
+        <span
+          className={`relative inline-flex h-8 w-8 items-center justify-center leading-none transition-all duration-200 ${visual.iconColor} ${
+            isIdle
+              ? "group-hover:scale-110 group-hover:text-gray-900"
+              : "group-hover:scale-105"
+          }`}
+        >
+          {visual.icon}
+        </span>
+      </button>
+    </div>
   );
 }
 

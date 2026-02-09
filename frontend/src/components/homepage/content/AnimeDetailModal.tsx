@@ -10,6 +10,7 @@ import { StarIcon } from "../../icon/StarIcon";
 import { CloseIcon } from "../../icon/CloseIcon";
 import { ExternalLinkIcon } from "../../icon/ExternalLinkIcon";
 import { DownloadEpisodeGroup } from "./DownloadEpisodeGroup";
+import type { DownloadActionState } from "./DownloadActionButton";
 import { LoadingSpinner } from "./LoadingSpinner";
 import { ErrorMessage } from "./ErrorMessage";
 
@@ -24,6 +25,67 @@ type EpisodeGroup = {
   episode: number | null;
   items: ParsedRssItem[];
 };
+
+type PendingStateOverride = {
+  state: Extract<DownloadActionState, "downloading" | "paused">;
+  expiresAt: number;
+};
+
+type DownloadTaskFilter = "all" | "downloading" | "completed";
+type ConfirmDialogAction =
+  | { type: "download"; item: ParsedRssItem }
+  | { type: "remove"; hash: string; title: string };
+
+const ACTION_OVERRIDE_TTL_MS = 8000;
+
+function getEpisodeGroupKey(group: EpisodeGroup): string {
+  if (group.type === "collection") return "ep-collection";
+  if (group.episode === null) return "ep-unknown";
+  return `ep-${group.episode}`;
+}
+
+function normalizeTorrentState(state?: string): string {
+  return (state ?? "").toLowerCase();
+}
+
+function isTorrentPausedState(state?: string): boolean {
+  const normalized = normalizeTorrentState(state);
+  return (
+    normalized.includes("paused") ||
+    normalized.includes("stopped") ||
+    normalized.includes("stop") ||
+    normalized.includes("stalldl") ||
+    normalized.includes("queueddl") ||
+    normalized.includes("pending")
+  );
+}
+
+function isTorrentDownloadingState(state?: string): boolean {
+  const normalized = normalizeTorrentState(state);
+  return (
+    normalized.includes("downloading") ||
+    normalized.includes("forceddl") ||
+    normalized.includes("metadl") ||
+    normalized.includes("allocating") ||
+    normalized.includes("checkingdl")
+  );
+}
+
+function isTorrentCompletedState(state?: string, progress?: number): boolean {
+  if (typeof progress === "number" && progress >= 99.9) {
+    return true;
+  }
+
+  const normalized = normalizeTorrentState(state);
+  return (
+    normalized.includes("completed") ||
+    normalized.includes("uploading") ||
+    normalized.includes("forcedup") ||
+    normalized.includes("checkingup") ||
+    normalized.includes("stalledup") ||
+    normalized.includes("queuedup")
+  );
+}
 
 function parseSeasonNumber(text?: string | null): number | null {
   if (!text) return null;
@@ -150,7 +212,13 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyHash, setBusyHash] = useState<string | null>(null);
+  const [taskFilter, setTaskFilter] = useState<DownloadTaskFilter>("all");
+  const [collapsedGroupKeys, setCollapsedGroupKeys] = useState<Set<string>>(new Set());
+  const [stateOverrides, setStateOverrides] = useState<Map<string, PendingStateOverride>>(new Map());
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogAction | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const stopPollingRef = useRef<(() => void) | null>(null);
+  const latestFeedRequestIdRef = useRef(0);
 
   const explicitSeasonNumber = useMemo(() => detectExplicitSeason(anime), [anime]);
   const shouldShowSeasonSelector = explicitSeasonNumber === null && seasons.length > 1;
@@ -185,11 +253,22 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const latestEpisodeLabel = language === "zh" ? "\u6700\u65b0\u66f4\u65b0" : "Latest update";
   const seasonLabel = language === "zh" ? "\u5b63\u5ea6" : "Season";
   const resolutionLabel = language === "zh" ? "\u5206\u8fa8\u7387" : "Resolution";
+  const statusLabel = language === "zh" ? "\u4e0b\u8f7d\u72b6\u6001" : "Task Status";
+  const statusDownloadingLabel = language === "zh" ? "\u4e0b\u8f7d\u4e2d" : "Downloading";
+  const statusCompletedLabel = language === "zh" ? "\u4e0b\u8f7d\u5b8c\u6210" : "Completed";
   const subgroupLabel = language === "zh" ? "\u5b57\u5e55\u7ec4" : "Subgroup";
   const subtitleLabel = language === "zh" ? "\u5b57\u5e55" : "Subtitle";
   const allLabel = language === "zh" ? "\u5168\u90e8" : "All";
+  const cancelLabel = language === "zh" ? "\u53d6\u6d88" : "Cancel";
+  const confirmActionLabel = language === "zh" ? "\u786e\u8ba4" : "Confirm";
+  const confirmDownloadTitle = language === "zh" ? "\u786e\u8ba4\u63a8\u9001\u4e0b\u8f7d\u4efb\u52a1" : "Confirm download task";
+  const confirmRemoveTitle = language === "zh" ? "\u786e\u8ba4\u5220\u9664\u4e0b\u8f7d\u4efb\u52a1" : "Confirm remove task";
 
   const loadSeasons = useCallback(async () => {
+    let shouldKeepLoadingForFeed = false;
+    setLoading(true);
+    setError(null);
+
     if (anime.mikan_bangumi_id) {
       setSeasons([
         {
@@ -200,19 +279,18 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         },
       ]);
       setSelectedSeasonIndex(0);
+      shouldKeepLoadingForFeed = true;
       return;
     }
 
     const searchTitle = anime.ch_title || anime.en_title || anime.jp_title;
     if (!searchTitle) {
       setError(language === "zh" ? "\u6ca1\u6709\u53ef\u641c\u7d22\u7684\u6807\u9898" : "No title available for search");
+      setLoading(false);
       return;
     }
 
     try {
-      setLoading(true);
-      setError(null);
-
       const result = await mikanApi.searchMikanAnime(searchTitle, anime.bangumi_id, explicitSeasonNumber ?? undefined);
       if (!result?.seasons?.length) {
         setError(language === "zh" ? "\u672a\u627e\u5230\u5339\u914d\u7684\u52a8\u753b" : "No matching anime found");
@@ -235,11 +313,14 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
       setSeasons(finalSeasons);
       setSelectedSeasonIndex(finalIndex);
+      shouldKeepLoadingForFeed = finalSeasons.length > 0;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to search";
       setError(errorMessage);
     } finally {
-      setLoading(false);
+      if (!shouldKeepLoadingForFeed) {
+        setLoading(false);
+      }
     }
   }, [anime, explicitSeasonNumber, language]);
 
@@ -248,31 +329,91 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
     const season = seasons[selectedSeasonIndex];
     if (!season) return;
+    const requestId = latestFeedRequestIdRef.current + 1;
+    latestFeedRequestIdRef.current = requestId;
 
     try {
       setLoading(true);
       setError(null);
 
       const feed = await mikanApi.getMikanFeed(season.mikanBangumiId, anime.bangumi_id);
+      if (requestId !== latestFeedRequestIdRef.current) {
+        return;
+      }
+
       setFeedItems(feed.items);
       setLatestEpisode(feed.latestEpisode ?? null);
       setLatestPublishedAt(feed.latestPublishedAt ?? null);
+      setCollapsedGroupKeys(new Set());
+      setTaskFilter("all");
+      setDownloadStatus(new Map());
+      setTorrentInfo(new Map());
+      setStateOverrides(new Map());
 
       // Keep cross-anime preference for resolution, reset scoped filters to avoid stale invalid options.
       setDownloadPreferences({ subgroup: "all", subtitleType: "all" });
 
-      const status = await mikanApi.checkDownloadStatus(feed.items);
-      setDownloadStatus(status);
-
       stopPollingRef.current?.();
       stopPollingRef.current = mikanApi.startProgressPolling(3000, (progresses: Map<string, TorrentInfo>) => {
+        if (requestId !== latestFeedRequestIdRef.current) {
+          return;
+        }
+
         setTorrentInfo(progresses);
+        setStateOverrides((prev) => {
+          if (prev.size === 0) {
+            return prev;
+          }
+
+          const now = Date.now();
+          let changed = false;
+          const next = new Map(prev);
+
+          for (const [hash, override] of prev.entries()) {
+            const info = progresses.get(hash);
+            const expired = override.expiresAt <= now;
+
+            if (!info) {
+              if (expired) {
+                next.delete(hash);
+                changed = true;
+              }
+              continue;
+            }
+
+            const confirmed =
+              override.state === "downloading"
+                ? isTorrentDownloadingState(info.state) || info.progress >= 99.9
+                : isTorrentPausedState(info.state);
+
+            if (confirmed || expired) {
+              next.delete(hash);
+              changed = true;
+            }
+          }
+
+          return changed ? next : prev;
+        });
       });
+
+      void mikanApi
+        .checkDownloadStatus(feed.items)
+        .then((status) => {
+          if (requestId !== latestFeedRequestIdRef.current) {
+            return;
+          }
+          setDownloadStatus(status);
+        })
+        .catch((statusError) => {
+          console.warn("Failed to query initial download status:", statusError);
+        });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to load feed";
       setError(errorMessage);
     } finally {
-      setLoading(false);
+      if (requestId === latestFeedRequestIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [anime.bangumi_id, seasons, selectedSeasonIndex, setDownloadPreferences]);
 
@@ -341,6 +482,30 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     setDownloadPreferences,
   ]);
 
+  const resolveItemTaskStatus = useCallback((item: ParsedRssItem): "idle" | "downloading" | "completed" => {
+    const hash = item.torrentHash?.trim().toUpperCase() ?? "";
+    if (!hash) {
+      return "idle";
+    }
+
+    const override = stateOverrides.get(hash);
+    if (override) {
+      return "downloading";
+    }
+
+    const hasRecord = downloadStatus.get(hash) ?? false;
+    if (!hasRecord) {
+      return "idle";
+    }
+
+    const info = torrentInfo.get(hash);
+    if (isTorrentCompletedState(info?.state, info?.progress)) {
+      return "completed";
+    }
+
+    return "downloading";
+  }, [downloadStatus, stateOverrides, torrentInfo]);
+
   const filteredItems = useMemo(
     () =>
       feedItems.filter((item) => {
@@ -353,24 +518,70 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         if (downloadPreferences.subtitleType !== "all" && item.subtitleType !== downloadPreferences.subtitleType) {
           return false;
         }
+
+        if (taskFilter !== "all") {
+          const status = resolveItemTaskStatus(item);
+          if (taskFilter === "downloading") {
+            return status === "downloading";
+          }
+          return status === "completed";
+        }
+
         return true;
       }),
-    [feedItems, downloadPreferences]
+    [feedItems, downloadPreferences, resolveItemTaskStatus, taskFilter]
   );
 
   const episodeGroups = useMemo(() => groupItemsByEpisode(filteredItems), [filteredItems]);
 
-  const markTorrentState = useCallback((hash: string, patch: Partial<TorrentInfo>) => {
-    setTorrentInfo((prev) => {
-      const next = new Map(prev);
-      const existing = next.get(hash);
-      if (!existing) return prev;
-      next.set(hash, { ...existing, ...patch });
+  const buttonStateOverrides = useMemo(() => {
+    const next = new Map<string, DownloadActionState>();
+    stateOverrides.forEach((value, hash) => {
+      next.set(hash, value.state);
+    });
+    return next;
+  }, [stateOverrides]);
+
+  const toggleGroupCollapse = useCallback((groupKey: string) => {
+    setCollapsedGroupKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) {
+        next.delete(groupKey);
+      } else {
+        next.add(groupKey);
+      }
       return next;
     });
   }, []);
 
-  const handleDownload = useCallback(
+  const applyStateOverride = useCallback((hash: string, state: PendingStateOverride["state"]) => {
+    const normalizedHash = hash.trim().toUpperCase();
+    if (!normalizedHash) return;
+
+    setStateOverrides((prev) => {
+      const next = new Map(prev);
+      next.set(normalizedHash, {
+        state,
+        expiresAt: Date.now() + ACTION_OVERRIDE_TTL_MS,
+      });
+      return next;
+    });
+  }, []);
+
+  const markTorrentState = useCallback((hash: string, patch: Partial<TorrentInfo>) => {
+    const normalizedHash = hash.trim().toUpperCase();
+    if (!normalizedHash) return;
+
+    setTorrentInfo((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(normalizedHash);
+      if (!existing) return prev;
+      next.set(normalizedHash, { ...existing, ...patch });
+      return next;
+    });
+  }, []);
+
+  const executeDownload = useCallback(
     async (item: ParsedRssItem) => {
       if (item.canDownload === false) {
         toast.error(language === "zh" ? "\u8d44\u6e90 hash \u7f3a\u5931\uff0c\u65e0\u6cd5\u4e0b\u8f7d" : "Torrent hash is missing, cannot download");
@@ -413,6 +624,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
           });
           return next;
         });
+        applyStateOverride(effectiveHash, "downloading");
 
         toast.success(language === "zh" ? "\u4efb\u52a1\u63a8\u9001\u6210\u529f" : "Task queued successfully");
       } catch (err) {
@@ -423,14 +635,16 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         setDownloadLoading(false);
       }
     },
-    [language, setDownloadLoading]
+    [applyStateOverride, language, setDownloadLoading]
   );
 
   const handlePause = useCallback(async (hash: string) => {
+    const normalizedHash = hash.trim().toUpperCase();
     try {
-      setBusyHash(hash);
-      await mikanApi.pauseTorrent(hash);
-      markTorrentState(hash, { state: "pausedDL" });
+      setBusyHash(normalizedHash);
+      await mikanApi.pauseTorrent(normalizedHash);
+      markTorrentState(normalizedHash, { state: "pausedDL" });
+      applyStateOverride(normalizedHash, "paused");
       toast.success(language === "zh" ? "\u5df2\u6682\u505c\u4e0b\u8f7d" : "Download paused");
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Failed to pause torrent";
@@ -438,13 +652,15 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     } finally {
       setBusyHash(null);
     }
-  }, [language, markTorrentState]);
+  }, [applyStateOverride, language, markTorrentState]);
 
   const handleResume = useCallback(async (hash: string) => {
+    const normalizedHash = hash.trim().toUpperCase();
     try {
-      setBusyHash(hash);
-      await mikanApi.resumeTorrent(hash);
-      markTorrentState(hash, { state: "downloading" });
+      setBusyHash(normalizedHash);
+      await mikanApi.resumeTorrent(normalizedHash);
+      markTorrentState(normalizedHash, { state: "downloading" });
+      applyStateOverride(normalizedHash, "downloading");
       toast.success(language === "zh" ? "\u5df2\u7ee7\u7eed\u4e0b\u8f7d" : "Download resumed");
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Failed to resume torrent";
@@ -452,22 +668,30 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     } finally {
       setBusyHash(null);
     }
-  }, [language, markTorrentState]);
+  }, [applyStateOverride, language, markTorrentState]);
 
-  const handleRemove = useCallback(async (hash: string) => {
+  const executeRemove = useCallback(async (hash: string) => {
+    const normalizedHash = hash.trim().toUpperCase();
     try {
-      setBusyHash(hash);
-      await mikanApi.removeTorrent(hash, false);
+      setBusyHash(normalizedHash);
+      await mikanApi.removeTorrent(normalizedHash, false);
 
       setTorrentInfo((prev) => {
         const next = new Map(prev);
-        next.delete(hash);
+        next.delete(normalizedHash);
         return next;
       });
 
       setDownloadStatus((prev) => {
         const next = new Map(prev);
-        next.set(hash, false);
+        next.set(normalizedHash, false);
+        return next;
+      });
+
+      setStateOverrides((prev) => {
+        if (!prev.has(normalizedHash)) return prev;
+        const next = new Map(prev);
+        next.delete(normalizedHash);
         return next;
       });
 
@@ -479,6 +703,47 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       setBusyHash(null);
     }
   }, [language]);
+
+  const requestDownload = useCallback(async (item: ParsedRssItem) => {
+    if (item.canDownload === false) {
+      toast.error(language === "zh" ? "\u8d44\u6e90 hash \u7f3a\u5931\uff0c\u65e0\u6cd5\u4e0b\u8f7d" : "Torrent hash is missing, cannot download");
+      return;
+    }
+    setConfirmDialog({ type: "download", item });
+  }, [language]);
+
+  const requestRemove = useCallback(async (hash: string, title: string) => {
+    const normalizedHash = hash.trim().toUpperCase();
+    if (!normalizedHash) {
+      return;
+    }
+    setConfirmDialog({ type: "remove", hash: normalizedHash, title });
+  }, []);
+
+  const closeConfirmDialog = useCallback(() => {
+    if (confirmBusy) {
+      return;
+    }
+    setConfirmDialog(null);
+  }, [confirmBusy]);
+
+  const confirmDialogAction = useCallback(async () => {
+    if (!confirmDialog || confirmBusy) {
+      return;
+    }
+
+    setConfirmBusy(true);
+    try {
+      if (confirmDialog.type === "download") {
+        await executeDownload(confirmDialog.item);
+      } else {
+        await executeRemove(confirmDialog.hash);
+      }
+      setConfirmDialog(null);
+    } finally {
+      setConfirmBusy(false);
+    }
+  }, [confirmBusy, confirmDialog, executeDownload, executeRemove]);
 
   const handleSeasonChange = (event: ChangeEvent<HTMLSelectElement>) => {
     setSelectedSeasonIndex(Number.parseInt(event.target.value, 10));
@@ -499,6 +764,13 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       void loadFeed();
     }
   }, [seasons, selectedSeasonIndex, loadFeed]);
+
+  useEffect(() => {
+    if (!open) {
+      setConfirmDialog(null);
+      setConfirmBusy(false);
+    }
+  }, [open]);
 
   useEffect(() => {
     return () => {
@@ -531,6 +803,24 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       : latestPublishedAt
         ? new Date(latestPublishedAt).toLocaleString()
         : null;
+  const confirmDialogTitle = !confirmDialog
+    ? ""
+    : confirmDialog.type === "download"
+      ? confirmDownloadTitle
+      : confirmRemoveTitle;
+  const confirmDialogMessage = !confirmDialog
+    ? ""
+    : confirmDialog.type === "download"
+      ? (
+        language === "zh"
+          ? `\u786e\u8ba4\u540eqBittorrent\u5c06\u4f1a\u7acb\u5373\u5f00\u59cb\u300c${confirmDialog.item.title}\u300d\u3002`
+          : `Confirm to start "${confirmDialog.item.title}" in qBittorrent immediately.`
+      )
+      : (
+        language === "zh"
+          ? `\u786e\u8ba4\u540eqBittorrent\u5c06\u4f1a\u7acb\u5373\u5220\u9664\u300c${confirmDialog.title}\u300d\u4efb\u52a1\uff08\u5305\u62ec\u6587\u4ef6\uff09\u3002`
+          : `Confirm to delete "${confirmDialog.title}" from qBittorrent immediately (including files).`
+      );
 
   const modalContent = (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -650,8 +940,18 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
               </div>
             )}
 
-            {!loading && !error && filteredItems.length > 0 && (
+            {!loading && !error && feedItems.length > 0 && (
               <div className="flex gap-3 mb-4 flex-wrap">
+                <select
+                  value={taskFilter}
+                  onChange={(event) => setTaskFilter(event.target.value as DownloadTaskFilter)}
+                  className="rounded-md border-gray-300 py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                >
+                  <option value="all">{statusLabel}: {allLabel}</option>
+                  <option value="downloading">{statusLabel}: {statusDownloadingLabel}</option>
+                  <option value="completed">{statusLabel}: {statusCompletedLabel}</option>
+                </select>
+
                 <select
                   value={downloadPreferences.resolution}
                   onChange={(event) => handlePreferenceChange("resolution", event.target.value)}
@@ -695,27 +995,28 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
             {!loading && !error && filteredItems.length > 0 && (
               <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
-                {episodeGroups.map((group) => (
-                  <DownloadEpisodeGroup
-                    key={
-                      group.type === "collection"
-                        ? "ep-collection"
-                        : group.episode === null
-                          ? "ep-unknown"
-                          : `ep-${group.episode}`
-                    }
-                    episode={group.episode}
-                    isCollectionGroup={group.type === "collection"}
-                    items={group.items}
-                    downloadStatus={downloadStatus}
-                    torrentInfo={torrentInfo}
-                    busyHash={busyHash}
-                    onDownload={handleDownload}
-                    onPause={handlePause}
-                    onResume={handleResume}
-                    onRemove={handleRemove}
-                  />
-                ))}
+                {episodeGroups.map((group) => {
+                  const groupKey = getEpisodeGroupKey(group);
+                  return (
+                    <DownloadEpisodeGroup
+                      key={groupKey}
+                      groupKey={groupKey}
+                      episode={group.episode}
+                      isCollectionGroup={group.type === "collection"}
+                      collapsed={collapsedGroupKeys.has(groupKey)}
+                      onToggleCollapse={toggleGroupCollapse}
+                      items={group.items}
+                      downloadStatus={downloadStatus}
+                      stateOverrides={buttonStateOverrides}
+                      torrentInfo={torrentInfo}
+                      busyHash={busyHash}
+                      onDownload={requestDownload}
+                      onPause={handlePause}
+                      onResume={handleResume}
+                      onRemove={requestRemove}
+                    />
+                  );
+                })}
               </div>
             )}
 
@@ -731,6 +1032,43 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
           </div>
         </div>
       </div>
+
+      {confirmDialog && (
+        <div
+          className="absolute inset-0 z-30 flex items-center justify-center bg-black/35 p-4"
+          onClick={(event) => {
+            event.stopPropagation();
+            closeConfirmDialog();
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-5 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h4 className="text-base font-semibold text-gray-900">{confirmDialogTitle}</h4>
+            <p className="mt-2 text-sm text-gray-600">{confirmDialogMessage}</p>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeConfirmDialog}
+                disabled={confirmBusy}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {cancelLabel}
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmDialogAction()}
+                disabled={confirmBusy}
+                className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-sm text-gray-900 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {confirmBusy ? (language === "zh" ? "\u5904\u7406\u4e2d..." : "Processing...") : confirmActionLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 

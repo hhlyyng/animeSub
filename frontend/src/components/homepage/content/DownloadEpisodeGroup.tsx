@@ -1,21 +1,26 @@
 import { useMemo } from "react";
 import type { ParsedRssItem, TorrentInfo } from "../../../types/mikan";
 import { DownloadActionButton } from "./DownloadActionButton";
+import type { DownloadActionState } from "./DownloadActionButton";
 
 type DownloadEpisodeGroupProps = {
+  groupKey: string;
   episode: number | null;
   isCollectionGroup?: boolean;
+  collapsed: boolean;
+  onToggleCollapse: (groupKey: string) => void;
   items: ParsedRssItem[];
   downloadStatus: Map<string, boolean>;
+  stateOverrides: Map<string, DownloadActionState>;
   torrentInfo: Map<string, TorrentInfo>;
   busyHash: string | null;
   onDownload: (item: ParsedRssItem) => Promise<void>;
   onPause: (hash: string) => Promise<void>;
   onResume: (hash: string) => Promise<void>;
-  onRemove: (hash: string) => Promise<void>;
+  onRemove: (hash: string, title: string) => Promise<void>;
 };
 
-type ButtonState = "idle" | "downloading" | "paused" | "completed";
+type ButtonState = DownloadActionState;
 
 function isCompleted(info: TorrentInfo | undefined): boolean {
   if (!info) return false;
@@ -187,10 +192,14 @@ function toDisplayTags(item: ParsedRssItem): { tags: string[]; weakTag: string |
 }
 
 export function DownloadEpisodeGroup({
+  groupKey,
   episode,
   isCollectionGroup = false,
+  collapsed,
+  onToggleCollapse,
   items,
   downloadStatus,
+  stateOverrides,
   torrentInfo,
   busyHash,
   onDownload,
@@ -208,7 +217,7 @@ export function DownloadEpisodeGroup({
         const canDownload = item.canDownload ?? hasHash;
         const info = hasHash ? torrentInfo.get(hash) : undefined;
         const hasRecord = hasHash ? (downloadStatus.get(hash) ?? false) : false;
-        const state = resolveButtonState(info, hasRecord);
+        const state = (hasHash ? stateOverrides.get(hash) : undefined) ?? resolveButtonState(info, hasRecord);
         const progress = state === "completed" ? 100 : info?.progress ?? 0;
         const display = toDisplayTags(item);
         return {
@@ -221,84 +230,115 @@ export function DownloadEpisodeGroup({
           weakTag: display.weakTag,
         };
       }),
-    [items, torrentInfo, downloadStatus]
+    [items, torrentInfo, downloadStatus, stateOverrides]
   );
 
   return (
     <section className="rounded-xl border border-gray-200 bg-white shadow-sm">
-      <header className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-4 py-3">
-        <h4 className="text-sm font-semibold text-gray-900">{title}</h4>
-        <span className="text-xs text-gray-500">{rows.length} sources</span>
+      <header>
+        <button
+          type="button"
+          onClick={() => onToggleCollapse(groupKey)}
+          className="flex w-full items-center justify-between border-b border-gray-100 bg-gray-50 px-4 py-3 text-left transition-colors hover:bg-gray-100"
+        >
+          <h4 className="text-sm font-semibold text-gray-900">{title}</h4>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-gray-500">{rows.length} sources</span>
+            <span
+              className={`inline-flex h-[1.6rem] w-[1.6rem] items-center justify-center text-gray-500 transition-transform duration-200 ${
+                collapsed ? "rotate-0" : "rotate-180"
+              }`}
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 24 24" fill="none" className="h-full w-full" stroke="currentColor" strokeWidth={2.2}>
+                <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          </div>
+        </button>
       </header>
 
-      <div className="divide-y divide-gray-100">
-        {rows.map(({ item, hash, canDownload, state, progress, tags, weakTag }) => {
-          const subgroup = item.subgroup?.trim() || "Unknown Group";
-          const hasHash = hash.length > 0;
-          const isBusy = hasHash ? busyHash === hash : false;
+      {!collapsed && (
+        <div className="divide-y divide-gray-100">
+          {rows.map(({ item, hash, canDownload, state, progress, tags, weakTag }) => {
+            const subgroup = item.subgroup?.trim() || "Unknown Group";
+            const hasHash = hash.length > 0;
+            const isBusy = hasHash ? busyHash === hash : false;
 
-          const handleAction = async () => {
-            if (state === "idle") {
-              if (!canDownload) {
+            const handleAction = async () => {
+              if (state === "idle") {
+                if (!canDownload) {
+                  return;
+                }
+                await onDownload(item);
                 return;
               }
-              await onDownload(item);
-              return;
-            }
-            if (!hasHash) {
-              return;
-            }
-            if (state === "downloading") {
-              await onPause(hash);
-              return;
-            }
-            if (state === "paused") {
-              await onResume(hash);
-              return;
-            }
-            await onRemove(hash);
-          };
+              if (!hasHash) {
+                return;
+              }
+              if (state === "downloading") {
+                await onPause(hash);
+                return;
+              }
+              if (state === "paused") {
+                await onResume(hash);
+                return;
+              }
+              await onRemove(hash, item.title);
+            };
 
-          const rowKey = hasHash ? hash : `${item.torrentUrl}-${item.magnetLink}-${item.publishedAt}-${item.title}`;
+            const rowKey = hasHash ? hash : `${item.torrentUrl}-${item.magnetLink}-${item.publishedAt}-${item.title}`;
 
-          return (
-            <article key={rowKey} className="flex items-center gap-4 px-4 py-3">
-              <div className="w-28 shrink-0">
-                <span className="inline-flex items-center rounded-md border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800">
-                  {subgroup}
-                </span>
-              </div>
-
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap gap-1.5">
-                  {tags.map((tag) => (
-                    <span
-                      key={`${rowKey}-${tag}`}
-                      className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                  {weakTag && (
-                    <span className="inline-flex items-center rounded-full border border-gray-100 bg-gray-50/60 px-2 py-0.5 text-[11px] text-gray-400">
-                      {weakTag}
-                    </span>
-                  )}
+            return (
+              <article key={rowKey} className="flex items-center gap-4 px-4 py-3">
+                <div className="w-28 shrink-0">
+                  <span className="inline-flex items-center rounded-md border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800">
+                    {subgroup}
+                  </span>
                 </div>
-              </div>
 
-              <div className="shrink-0">
-                <DownloadActionButton
-                  state={state}
-                  progress={progress}
-                  disabled={isBusy || (state === "idle" && !canDownload) || (!hasHash && state !== "idle")}
-                  onClick={handleAction}
-                />
-              </div>
-            </article>
-          );
-        })}
-      </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap gap-1.5">
+                    {tags.map((tag) => (
+                      <span
+                        key={`${rowKey}-${tag}`}
+                        className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] text-gray-600"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                    {weakTag && (
+                      <span className="inline-flex items-center rounded-full border border-gray-100 bg-gray-50/60 px-2 py-0.5 text-[11px] text-gray-400">
+                        {weakTag}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="shrink-0">
+                  <DownloadActionButton
+                    state={state}
+                    progress={progress}
+                    disabled={isBusy || (state === "idle" && !canDownload) || (!hasHash && state !== "idle")}
+                    secondaryAction={
+                      state === "paused" && hasHash
+                        ? {
+                            onClick: () => {
+                              void onRemove(hash, item.title);
+                            },
+                            disabled: isBusy,
+                            ariaLabel: "Remove torrent task",
+                          }
+                        : undefined
+                    }
+                    onClick={handleAction}
+                  />
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
