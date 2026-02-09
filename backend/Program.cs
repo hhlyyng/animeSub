@@ -122,7 +122,8 @@ builder.Services.AddScoped<IMikanClient>(sp =>
     var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.MikanClient>>();
     var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<backend.Models.Configuration.MikanConfiguration>>();
     var titleParser = sp.GetRequiredService<ITorrentTitleParser>();
-    return new backend.Services.Implementations.MikanClient(factory.CreateClient("mikan-client"), logger, config, titleParser);
+    var dbContext = sp.GetRequiredService<AnimeDbContext>();
+    return new backend.Services.Implementations.MikanClient(factory.CreateClient("mikan-client"), logger, config, titleParser, dbContext);
 });
 
 // Register torrent title parser

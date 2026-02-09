@@ -376,6 +376,172 @@ public class AnimeAggregationServiceTests
 
     #endregion
 
+    #region Top10 DB-First Tests
+
+    [Fact]
+    public async Task GetTopAnimeFromBangumiAsync_WhenCacheComplete_DoesNotCallExternalEnrichment()
+    {
+        // Arrange
+        var topSubjects = JsonDocument.Parse(
+            """
+            [
+              {
+                "id": 100,
+                "name": "Frieren",
+                "name_cn": "葬送的芙莉莲",
+                "summary": "summary",
+                "date": "2025-01-01",
+                "rating": { "score": 8.8 },
+                "images": { "large": "https://example.com/portrait.jpg" }
+              }
+            ]
+            """).RootElement;
+
+        _bangumiClientMock
+            .Setup(b => b.SearchTopSubjectsAsync(10))
+            .ReturnsAsync(topSubjects);
+
+        _repositoryMock
+            .Setup(r => r.GetAnimeInfoBatchAsync(It.IsAny<List<int>>()))
+            .ReturnsAsync(new List<AnimeInfoEntity>
+            {
+                new()
+                {
+                    BangumiId = 100,
+                    NameJapanese = "Frieren",
+                    NameChinese = "葬送的芙莉莲",
+                    NameEnglish = "Frieren: Beyond Journey's End",
+                    DescChinese = "cached zh",
+                    DescEnglish = "cached en",
+                    ImagePortrait = "https://example.com/portrait-db.jpg",
+                    ImageLandscape = "https://example.com/landscape-db.jpg",
+                    UrlTmdb = "https://www.themoviedb.org/tv/123",
+                    UrlAnilist = "https://anilist.co/anime/123"
+                }
+            });
+
+        _repositoryMock
+            .Setup(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _sut.GetTopAnimeFromBangumiAsync(limit: 10);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.Count.Should().Be(1);
+        result.Animes[0].Images.Landscape.Should().Be("https://example.com/landscape-db.jpg");
+
+        _tmdbClientMock.Verify(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+        _aniListClientMock.Verify(a => a.GetAnimeInfoAsync(It.IsAny<string>()), Times.Never);
+        _repositoryMock.Verify(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetTopAnimeFromBangumiAsync_WhenCacheMissing_BackfillsAndPersists()
+    {
+        // Arrange
+        var topSubjects = JsonDocument.Parse(
+            """
+            [
+              {
+                "id": 101,
+                "name": "Dandadan",
+                "name_cn": "胆大党",
+                "summary": "summary",
+                "date": "2025-02-01",
+                "rating": { "score": 8.2 },
+                "images": { "large": "https://example.com/portrait2.jpg" }
+              }
+            ]
+            """).RootElement;
+
+        _bangumiClientMock
+            .Setup(b => b.SearchTopSubjectsAsync(10))
+            .ReturnsAsync(topSubjects);
+
+        _repositoryMock
+            .Setup(r => r.GetAnimeInfoBatchAsync(It.IsAny<List<int>>()))
+            .ReturnsAsync(new List<AnimeInfoEntity>());
+
+        _tmdbClientMock
+            .Setup(t => t.GetAnimeSummaryAndBackdropAsync("Dandadan", "2025-02-01"))
+            .ReturnsAsync(TestDataFactory.CreateTMDBAnimeInfo());
+
+        _repositoryMock
+            .Setup(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _sut.GetTopAnimeFromBangumiAsync(limit: 10);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.Count.Should().Be(1);
+        _tmdbClientMock.Verify(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()), Times.Once);
+        _repositoryMock.Verify(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetTopAnimeFromMALAsync_WhenTitleCacheHit_DoesNotCallBangumiOrTmdb()
+    {
+        // Arrange
+        _jikanClientMock
+            .Setup(j => j.GetTopAnimeAsync(10))
+            .ReturnsAsync(new List<backend.Models.Jikan.JikanAnimeInfo>
+            {
+                new()
+                {
+                    MalId = 1,
+                    Title = "Sousou no Frieren",
+                    TitleJapanese = "葬送のフリーレン",
+                    TitleEnglish = "Frieren: Beyond Journey's End",
+                    Synopsis = "synopsis",
+                    Score = 9.1,
+                    Url = "https://myanimelist.net/anime/1",
+                    Images = new backend.Models.Jikan.JikanImages
+                    {
+                        Jpg = new backend.Models.Jikan.JikanImageFormat
+                        {
+                            LargeImageUrl = "https://example.com/mal-portrait.jpg"
+                        }
+                    }
+                }
+            });
+
+        _repositoryMock
+            .Setup(r => r.FindAnimeInfoByAnyTitleAsync(It.IsAny<string?[]>()))
+            .ReturnsAsync(new AnimeInfoEntity
+            {
+                BangumiId = 515759,
+                NameJapanese = "葬送のフリーレン",
+                NameChinese = "葬送的芙莉莲",
+                DescChinese = "cached zh",
+                ImageLandscape = "https://example.com/cached-landscape.jpg",
+                UrlBangumi = "https://bgm.tv/subject/515759",
+                UrlTmdb = "https://www.themoviedb.org/tv/123",
+                UrlAnilist = "https://anilist.co/anime/123"
+            });
+
+        _repositoryMock
+            .Setup(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _sut.GetTopAnimeFromMALAsync(limit: 10);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.Count.Should().Be(1);
+        result.Animes[0].ChTitle.Should().Be("葬送的芙莉莲");
+
+        _bangumiClientMock.Verify(b => b.SearchByTitleAsync(It.IsAny<string>()), Times.Never);
+        _tmdbClientMock.Verify(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
+        _repositoryMock.Verify(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()), Times.Once);
+    }
+
+    #endregion
+
     #region Helper Methods
 
     private static List<AnimeInfoEntity> CreateAnimeInfoEntities(int count)

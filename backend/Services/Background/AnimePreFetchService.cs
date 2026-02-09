@@ -157,11 +157,20 @@ public class AnimePreFetchService : BackgroundService
             var tmdbClient = scope.ServiceProvider.GetRequiredService<ITMDBClient>();
             var anilistClient = scope.ServiceProvider.GetRequiredService<IAniListClient>();
             var repository = scope.ServiceProvider.GetRequiredService<IAnimeRepository>();
+            var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
 
-            // Set tokens from configuration
-            var apiConfig = scope.ServiceProvider.GetRequiredService<IOptions<ApiConfiguration>>().Value;
-            bangumiClient.SetToken(_config.BangumiToken);
-            tmdbClient.SetToken(_config.TmdbToken);
+            // Token source priority:
+            // 1) PreFetch section explicit token
+            // 2) ApiTokens section shared token (development default)
+            var bangumiToken = !string.IsNullOrWhiteSpace(_config.BangumiToken)
+                ? _config.BangumiToken
+                : configuration["ApiTokens:BangumiToken"];
+            var tmdbToken = !string.IsNullOrWhiteSpace(_config.TmdbToken)
+                ? _config.TmdbToken
+                : configuration["ApiTokens:TmdbToken"];
+
+            bangumiClient.SetToken(bangumiToken ?? string.Empty);
+            tmdbClient.SetToken(tmdbToken);
 
             // Fetch entire week's calendar
             var calendar = await FetchWeeklyCalendarAsync(bangumiClient, cancellationToken);

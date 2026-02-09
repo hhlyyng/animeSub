@@ -35,6 +35,12 @@ public class MikanConfiguration
     public int TimeoutSeconds { get; set; } = 30;
 
     /// <summary>
+    /// Parsed feed cache TTL in minutes (default: 15).
+    /// After this window, cache is refreshed lazily on next request.
+    /// </summary>
+    public int FeedCacheTtlMinutes { get; set; } = 15;
+
+    /// <summary>
     /// Delay in seconds before starting the first poll after service startup (default: 30)
     /// Allows other services to initialize
     /// </summary>

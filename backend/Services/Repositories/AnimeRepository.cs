@@ -111,6 +111,38 @@ public class AnimeRepository : IAnimeRepository
         return animes;
     }
 
+    public async Task<AnimeInfoEntity?> FindAnimeInfoByAnyTitleAsync(params string?[] titles)
+    {
+        var normalized = titles
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => t!.Trim().ToLower())
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (normalized.Count == 0)
+        {
+            return null;
+        }
+
+        var result = await _context.AnimeInfos
+            .Where(a =>
+                (a.NameJapanese != null && normalized.Contains(a.NameJapanese.Trim().ToLower())) ||
+                (a.NameChinese != null && normalized.Contains(a.NameChinese.Trim().ToLower())) ||
+                (a.NameEnglish != null && normalized.Contains(a.NameEnglish.Trim().ToLower())))
+            .OrderByDescending(a => a.UpdatedAt)
+            .FirstOrDefaultAsync();
+
+        if (result != null)
+        {
+            _logger.LogDebug(
+                "Anime info title cache hit for BangumiId {BangumiId} via titles [{Titles}]",
+                result.BangumiId,
+                string.Join(", ", normalized));
+        }
+
+        return result;
+    }
+
     public async Task SaveAnimeInfoAsync(AnimeInfoEntity anime)
     {
         var existing = await _context.AnimeInfos

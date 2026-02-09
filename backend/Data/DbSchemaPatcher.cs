@@ -36,6 +36,46 @@ public static class DbSchemaPatcher
 
             await ExecuteNonQueryAsync(
                 connection,
+                """
+                CREATE TABLE IF NOT EXISTS "MikanFeedCache" (
+                    "MikanBangumiId" TEXT NOT NULL CONSTRAINT "PK_MikanFeedCache" PRIMARY KEY,
+                    "SeasonName" TEXT NOT NULL,
+                    "LatestEpisode" INTEGER NULL,
+                    "LatestPublishedAt" TEXT NULL,
+                    "LatestTitle" TEXT NULL,
+                    "EpisodeOffset" INTEGER NOT NULL DEFAULT 0,
+                    "UpdatedAt" TEXT NOT NULL
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                """
+                CREATE TABLE IF NOT EXISTS "MikanFeedItem" (
+                    "Id" INTEGER NOT NULL CONSTRAINT "PK_MikanFeedItem" PRIMARY KEY AUTOINCREMENT,
+                    "MikanBangumiId" TEXT NOT NULL,
+                    "Title" TEXT NOT NULL,
+                    "TorrentUrl" TEXT NOT NULL DEFAULT '',
+                    "MagnetLink" TEXT NOT NULL DEFAULT '',
+                    "TorrentHash" TEXT NOT NULL DEFAULT '',
+                    "CanDownload" INTEGER NOT NULL DEFAULT 0,
+                    "FileSize" INTEGER NOT NULL DEFAULT 0,
+                    "FormattedSize" TEXT NOT NULL DEFAULT '',
+                    "PublishedAt" TEXT NOT NULL,
+                    "Resolution" TEXT NULL,
+                    "Subgroup" TEXT NULL,
+                    "SubtitleType" TEXT NULL,
+                    "Episode" INTEGER NULL,
+                    "IsCollection" INTEGER NOT NULL DEFAULT 0,
+                    CONSTRAINT "FK_MikanFeedItem_MikanFeedCache_MikanBangumiId"
+                        FOREIGN KEY ("MikanBangumiId") REFERENCES "MikanFeedCache" ("MikanBangumiId") ON DELETE CASCADE
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
                 "CREATE INDEX IF NOT EXISTS IX_AnimeInfo_MikanBangumiId ON AnimeInfo(MikanBangumiId);",
                 cancellationToken);
             await ExecuteNonQueryAsync(
@@ -45,6 +85,22 @@ public static class DbSchemaPatcher
             await ExecuteNonQueryAsync(
                 connection,
                 "CREATE INDEX IF NOT EXISTS IX_DownloadHistory_LastSyncedAt ON DownloadHistory(LastSyncedAt);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_MikanFeedCache_UpdatedAt ON MikanFeedCache(UpdatedAt);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_MikanFeedItem_MikanBangumiId ON MikanFeedItem(MikanBangumiId);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_MikanFeedItem_TorrentHash ON MikanFeedItem(TorrentHash);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_MikanFeedItem_PublishedAt ON MikanFeedItem(PublishedAt);",
                 cancellationToken);
         }
         finally

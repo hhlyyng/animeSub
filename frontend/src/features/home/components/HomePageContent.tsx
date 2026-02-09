@@ -5,10 +5,10 @@ import { useAppStore } from "../../../stores/useAppStores";
 import { API_BASE_URL } from "../../../config/env";
 
 const CACHE_KEYS = {
-    todayAnimes: 'todayAnimes',
-    bangumiTop10: 'bangumiTop10',
-    anilistTop10: 'anilistTop10',
-    malTop10: 'malTop10'
+    todayAnimes: 'v2:todayAnimes',
+    bangumiTop10: 'v2:bangumiTop10',
+    anilistTop10: 'v2:anilistTop10',
+    malTop10: 'v2:malTop10'
 };
 
 const API_BASE = `${API_BASE_URL}/anime`;

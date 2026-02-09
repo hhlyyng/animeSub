@@ -15,11 +15,12 @@ public interface ITokenStorageService
 }
 
 /// <summary>
-/// Manages encrypted persistent storage of API tokens in JSON file
-/// Uses ASP.NET Core Data Protection API for encryption
+/// Resolves API tokens with appsettings-first strategy and legacy file fallback.
+/// Legacy file storage still uses Data Protection encryption.
 /// </summary>
 public class TokenStorageService : ITokenStorageService
 {
+    private readonly IConfiguration _configuration;
     private readonly string _filePath;
     private readonly IDataProtector _protector;
     private readonly ILogger<TokenStorageService> _logger;
@@ -27,26 +28,48 @@ public class TokenStorageService : ITokenStorageService
 
     public TokenStorageService(
         IWebHostEnvironment env,
+        IConfiguration configuration,
         IDataProtectionProvider protectionProvider,
         ILogger<TokenStorageService> logger)
     {
+        _configuration = configuration;
         _logger = logger;
         _filePath = Path.Combine(env.ContentRootPath, "appsettings.user.json");
 
         // Create dedicated protector with specific purpose string
         _protector = protectionProvider.CreateProtector("AnimeSubscription.TokenStorage.v1");
 
-        _logger.LogInformation("Token storage initialized at {Path}", _filePath);
+        _logger.LogInformation(
+            "Token storage initialized. Primary source: appsettings.json, legacy source: {Path}",
+            _filePath);
     }
 
     public async Task<string?> GetBangumiTokenAsync()
     {
+        // Development priority: appsettings.json
+        var configuredToken = _configuration["ApiTokens:BangumiToken"]
+            ?? _configuration["PreFetch:BangumiToken"];
+        if (!string.IsNullOrWhiteSpace(configuredToken))
+        {
+            return configuredToken;
+        }
+
+        // Legacy fallback
         var tokens = await ReadTokensAsync();
         return DecryptToken(tokens?.BangumiToken);
     }
 
     public async Task<string?> GetTmdbTokenAsync()
     {
+        // Development priority: appsettings.json
+        var configuredToken = _configuration["ApiTokens:TmdbToken"]
+            ?? _configuration["PreFetch:TmdbToken"];
+        if (!string.IsNullOrWhiteSpace(configuredToken))
+        {
+            return configuredToken;
+        }
+
+        // Legacy fallback
         var tokens = await ReadTokensAsync();
         return DecryptToken(tokens?.TmdbToken);
     }
@@ -59,6 +82,16 @@ public class TokenStorageService : ITokenStorageService
 
     public async Task SaveTokensAsync(string? bangumiToken, string? tmdbToken)
     {
+        var configuredBangumiToken = _configuration["ApiTokens:BangumiToken"]
+            ?? _configuration["PreFetch:BangumiToken"];
+        var configuredTmdbToken = _configuration["ApiTokens:TmdbToken"]
+            ?? _configuration["PreFetch:TmdbToken"];
+        if (!string.IsNullOrWhiteSpace(configuredBangumiToken) || !string.IsNullOrWhiteSpace(configuredTmdbToken))
+        {
+            _logger.LogInformation(
+                "appsettings tokens are configured; legacy saved tokens are fallback only unless appsettings tokens are cleared");
+        }
+
         await _lock.WaitAsync();
         try
         {
@@ -87,7 +120,7 @@ public class TokenStorageService : ITokenStorageService
     {
         if (!File.Exists(_filePath))
         {
-            _logger.LogWarning("Token file not found: {Path}", _filePath);
+            _logger.LogDebug("Legacy token file not found: {Path}", _filePath);
             return null;
         }
 

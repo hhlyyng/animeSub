@@ -17,6 +17,7 @@ public interface IAnimeRepository
     Task SaveAnimeInfoAsync(AnimeInfoEntity anime);
     Task SaveAnimeInfoBatchAsync(List<AnimeInfoEntity> animes);
     Task<List<AnimeInfoEntity>> GetAnimeInfoBatchAsync(List<int> bangumiIds);
+    Task<AnimeInfoEntity?> FindAnimeInfoByAnyTitleAsync(params string?[] titles);
     Task<List<AnimeInfoEntity>> GetAnimesByWeekdayAsync(int weekday);
     Task<List<AnimeInfoEntity>> GetPreFetchedAnimesAsync(List<int> bangumiIds);
 

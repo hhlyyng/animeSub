@@ -14,6 +14,8 @@ public class AnimeDbContext : DbContext
     public DbSet<DailyScheduleCacheEntity> DailyScheduleCaches { get; set; }
     public DbSet<SubscriptionEntity> Subscriptions { get; set; }
     public DbSet<DownloadHistoryEntity> DownloadHistory { get; set; }
+    public DbSet<MikanFeedCacheEntity> MikanFeedCaches { get; set; }
+    public DbSet<MikanFeedItemEntity> MikanFeedItems { get; set; }
 
     public AnimeDbContext(DbContextOptions<AnimeDbContext> options)
         : base(options)
@@ -76,6 +78,27 @@ public class AnimeDbContext : DbContext
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.Source);
             entity.HasIndex(e => e.LastSyncedAt);
+        });
+
+        // Configure Mikan parsed feed cache header
+        modelBuilder.Entity<MikanFeedCacheEntity>(entity =>
+        {
+            entity.HasKey(e => e.MikanBangumiId);
+            entity.HasIndex(e => e.UpdatedAt);
+
+            entity.HasMany(e => e.Items)
+                .WithOne(i => i.FeedCache)
+                .HasForeignKey(i => i.MikanBangumiId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Configure Mikan parsed feed cache items
+        modelBuilder.Entity<MikanFeedItemEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.MikanBangumiId);
+            entity.HasIndex(e => e.TorrentHash);
+            entity.HasIndex(e => e.PublishedAt);
         });
     }
 }

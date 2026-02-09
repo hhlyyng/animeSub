@@ -3,7 +3,10 @@ using System.Net;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using HtmlAgilityPack;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using backend.Data;
+using backend.Data.Entities;
 using backend.Models.Configuration;
 using backend.Models.Dtos;
 using backend.Models.Mikan;
@@ -24,6 +27,8 @@ public partial class MikanClient : IMikanClient
     private readonly ILogger<MikanClient> _logger;
     private readonly MikanConfiguration _config;
     private readonly ITorrentTitleParser _titleParser;
+    private readonly AnimeDbContext? _dbContext;
+    private readonly TimeSpan _feedCacheTtl;
 
     [GeneratedRegex(@"\b(20\d{2})\b", RegexOptions.Compiled)]
     private static partial Regex YearRegex();
@@ -38,12 +43,15 @@ public partial class MikanClient : IMikanClient
         HttpClient httpClient,
         ILogger<MikanClient> logger,
         IOptions<MikanConfiguration> config,
-        ITorrentTitleParser titleParser)
+        ITorrentTitleParser titleParser,
+        AnimeDbContext? dbContext = null)
     {
         _httpClient = httpClient;
         _logger = logger;
         _config = config.Value;
         _titleParser = titleParser;
+        _dbContext = dbContext;
+        _feedCacheTtl = TimeSpan.FromMinutes(Math.Max(1, _config.FeedCacheTtlMinutes));
 
         var baseUrl = _config.BaseUrl;
         if (!baseUrl.EndsWith('/'))
@@ -560,10 +568,40 @@ public partial class MikanClient : IMikanClient
     public async Task<MikanFeedResponse> GetParsedFeedAsync(string mikanBangumiId)
     {
         _logger.LogInformation("Getting parsed feed for Mikan ID: {MikanId}", mikanBangumiId);
+        var (cachedResponse, cachedUpdatedAt) = await TryLoadCachedFeedAsync(mikanBangumiId);
+        if (cachedResponse != null &&
+            cachedUpdatedAt.HasValue &&
+            !IsFeedCacheExpired(cachedUpdatedAt.Value))
+        {
+            _logger.LogInformation(
+                "Returning parsed feed from cache for Mikan ID: {MikanId} (updated at {UpdatedAt:O})",
+                mikanBangumiId,
+                cachedUpdatedAt.Value);
+            return cachedResponse;
+        }
 
-        var feed = await GetAnimeFeedAsync(mikanBangumiId);
-        _logger.LogInformation("Retrieved RSS feed: Title={Title}, ItemsCount={Count}", feed.Title, feed.Items.Count);
+        try
+        {
+            var feed = await GetAnimeFeedAsync(mikanBangumiId);
+            _logger.LogInformation("Retrieved RSS feed: Title={Title}, ItemsCount={Count}", feed.Title, feed.Items.Count);
 
+            var response = BuildParsedFeedResponse(feed);
+            await UpsertCachedFeedAsync(mikanBangumiId, response);
+            return response;
+        }
+        catch (Exception ex) when (cachedResponse != null)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to refresh parsed feed for Mikan ID: {MikanId}, using stale cache (updated at {UpdatedAt:O})",
+                mikanBangumiId,
+                cachedUpdatedAt);
+            return cachedResponse;
+        }
+    }
+
+    private MikanFeedResponse BuildParsedFeedResponse(MikanRssFeed feed)
+    {
         var response = new MikanFeedResponse
         {
             SeasonName = feed.Title,
@@ -659,6 +697,178 @@ public partial class MikanClient : IMikanClient
             response.AvailableSubtitleTypes.Count);
 
         return response;
+    }
+
+    private async Task<(MikanFeedResponse? response, DateTime? updatedAt)> TryLoadCachedFeedAsync(string mikanBangumiId)
+    {
+        if (_dbContext == null)
+        {
+            return (null, null);
+        }
+
+        var cache = await _dbContext.MikanFeedCaches
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.MikanBangumiId == mikanBangumiId);
+
+        if (cache == null)
+        {
+            return (null, null);
+        }
+
+        var items = await _dbContext.MikanFeedItems
+            .AsNoTracking()
+            .Where(i => i.MikanBangumiId == mikanBangumiId)
+            .OrderByDescending(i => i.PublishedAt)
+            .ThenByDescending(i => i.Id)
+            .ToListAsync();
+
+        var response = new MikanFeedResponse
+        {
+            SeasonName = cache.SeasonName,
+            EpisodeOffset = cache.EpisodeOffset,
+            LatestEpisode = cache.LatestEpisode,
+            LatestPublishedAt = cache.LatestPublishedAt,
+            LatestTitle = cache.LatestTitle,
+            Items = items.Select(MapEntityToParsedItem).ToList()
+        };
+
+        response.AvailableSubgroups = response.Items
+            .Select(i => i.Subgroup)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .Select(s => s!)
+            .ToList();
+
+        response.AvailableResolutions = response.Items
+            .Select(i => i.Resolution)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .Select(s => s!)
+            .ToList();
+
+        response.AvailableSubtitleTypes = response.Items
+            .Select(i => i.SubtitleType)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .Select(s => s!)
+            .ToList();
+
+        if (!response.LatestPublishedAt.HasValue || string.IsNullOrWhiteSpace(response.LatestTitle))
+        {
+            var latestItem = response.Items.OrderByDescending(i => i.PublishedAt).FirstOrDefault();
+            if (latestItem != null)
+            {
+                response.LatestPublishedAt = latestItem.PublishedAt;
+                response.LatestTitle = latestItem.Title;
+            }
+        }
+
+        if (!response.LatestEpisode.HasValue)
+        {
+            var latestEpisode = response.Items
+                .Where(i => i.Episode.HasValue)
+                .Select(i => i.Episode!.Value)
+                .DefaultIfEmpty()
+                .Max();
+            response.LatestEpisode = latestEpisode > 0 ? latestEpisode : null;
+        }
+
+        return (response, cache.UpdatedAt);
+    }
+
+    private async Task UpsertCachedFeedAsync(string mikanBangumiId, MikanFeedResponse response)
+    {
+        if (_dbContext == null)
+        {
+            return;
+        }
+
+        var cache = await _dbContext.MikanFeedCaches
+            .FirstOrDefaultAsync(c => c.MikanBangumiId == mikanBangumiId);
+
+        if (cache == null)
+        {
+            cache = new MikanFeedCacheEntity
+            {
+                MikanBangumiId = mikanBangumiId
+            };
+            _dbContext.MikanFeedCaches.Add(cache);
+        }
+
+        cache.SeasonName = response.SeasonName;
+        cache.LatestEpisode = response.LatestEpisode;
+        cache.LatestPublishedAt = response.LatestPublishedAt;
+        cache.LatestTitle = response.LatestTitle;
+        cache.EpisodeOffset = response.EpisodeOffset;
+        cache.UpdatedAt = DateTime.UtcNow;
+
+        var existingItems = await _dbContext.MikanFeedItems
+            .Where(i => i.MikanBangumiId == mikanBangumiId)
+            .ToListAsync();
+        if (existingItems.Count > 0)
+        {
+            _dbContext.MikanFeedItems.RemoveRange(existingItems);
+        }
+
+        foreach (var item in response.Items)
+        {
+            _dbContext.MikanFeedItems.Add(MapParsedItemToEntity(mikanBangumiId, item));
+        }
+
+        await _dbContext.SaveChangesAsync();
+    }
+
+    private bool IsFeedCacheExpired(DateTime updatedAt)
+    {
+        var utcUpdatedAt = updatedAt.Kind == DateTimeKind.Utc
+            ? updatedAt
+            : DateTime.SpecifyKind(updatedAt, DateTimeKind.Utc);
+
+        return DateTime.UtcNow - utcUpdatedAt > _feedCacheTtl;
+    }
+
+    private static ParsedRssItem MapEntityToParsedItem(MikanFeedItemEntity entity)
+    {
+        return new ParsedRssItem
+        {
+            Title = entity.Title,
+            TorrentUrl = entity.TorrentUrl,
+            MagnetLink = entity.MagnetLink,
+            TorrentHash = entity.TorrentHash,
+            CanDownload = entity.CanDownload,
+            FileSize = entity.FileSize,
+            FormattedSize = entity.FormattedSize,
+            PublishedAt = entity.PublishedAt,
+            Resolution = entity.Resolution,
+            Subgroup = entity.Subgroup,
+            SubtitleType = entity.SubtitleType,
+            Episode = entity.Episode,
+            IsCollection = entity.IsCollection
+        };
+    }
+
+    private static MikanFeedItemEntity MapParsedItemToEntity(string mikanBangumiId, ParsedRssItem item)
+    {
+        return new MikanFeedItemEntity
+        {
+            MikanBangumiId = mikanBangumiId,
+            Title = item.Title,
+            TorrentUrl = item.TorrentUrl,
+            MagnetLink = item.MagnetLink,
+            TorrentHash = item.TorrentHash,
+            CanDownload = item.CanDownload,
+            FileSize = item.FileSize,
+            FormattedSize = item.FormattedSize,
+            PublishedAt = item.PublishedAt,
+            Resolution = item.Resolution,
+            Subgroup = item.Subgroup,
+            SubtitleType = item.SubtitleType,
+            Episode = item.Episode,
+            IsCollection = item.IsCollection
+        };
     }
 
     private static string FormatFileSize(long bytes)
