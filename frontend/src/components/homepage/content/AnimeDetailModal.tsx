@@ -37,6 +37,7 @@ type ConfirmDialogAction =
   | { type: "remove"; hash: string; title: string };
 
 const ACTION_OVERRIDE_TTL_MS = 8000;
+const NO_SUBTITLE_FILTER_VALUE = "__NO_SUBTITLE__";
 
 function getEpisodeGroupKey(group: EpisodeGroup): string {
   if (group.type === "collection") return "ep-collection";
@@ -140,6 +141,11 @@ function uniqueSorted(values: Array<string | null | undefined>): string[] {
         .filter((value) => value.length > 0)
     )
   ).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+}
+
+function normalizeSubtitleFilterValue(value: string | null | undefined): string {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 ? normalized : NO_SUBTITLE_FILTER_VALUE;
 }
 
 function pickSeasonByNumber(seasons: MikanSeasonInfo[], expected: number): MikanSeasonInfo[] {
@@ -258,6 +264,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const statusCompletedLabel = language === "zh" ? "\u4e0b\u8f7d\u5b8c\u6210" : "Completed";
   const subgroupLabel = language === "zh" ? "\u5b57\u5e55\u7ec4" : "Subgroup";
   const subtitleLabel = language === "zh" ? "\u5b57\u5e55" : "Subtitle";
+  const noSubtitleLabel = language === "zh" ? "\u65e0\u5b57\u5e55" : "No subtitle";
   const allLabel = language === "zh" ? "\u5168\u90e8" : "All";
   const cancelLabel = language === "zh" ? "\u53d6\u6d88" : "Cancel";
   const confirmActionLabel = language === "zh" ? "\u786e\u8ba4" : "Confirm";
@@ -424,7 +431,10 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       if (downloadPreferences.resolution !== "all" && item.resolution !== downloadPreferences.resolution) {
         return false;
       }
-      if (downloadPreferences.subtitleType !== "all" && item.subtitleType !== downloadPreferences.subtitleType) {
+      if (
+        downloadPreferences.subtitleType !== "all" &&
+        normalizeSubtitleFilterValue(item.subtitleType) !== downloadPreferences.subtitleType
+      ) {
         return false;
       }
       return true;
@@ -442,7 +452,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       }
       return true;
     });
-    return uniqueSorted(candidateItems.map((item) => item.subtitleType));
+    return uniqueSorted(candidateItems.map((item) => normalizeSubtitleFilterValue(item.subtitleType)));
   }, [feedItems, downloadPreferences.resolution, downloadPreferences.subgroup]);
 
   useEffect(() => {
@@ -515,7 +525,10 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         if (downloadPreferences.subgroup !== "all" && item.subgroup !== downloadPreferences.subgroup) {
           return false;
         }
-        if (downloadPreferences.subtitleType !== "all" && item.subtitleType !== downloadPreferences.subtitleType) {
+        if (
+          downloadPreferences.subtitleType !== "all" &&
+          normalizeSubtitleFilterValue(item.subtitleType) !== downloadPreferences.subtitleType
+        ) {
           return false;
         }
 
@@ -986,7 +999,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                   <option value="all">{subtitleLabel}: {allLabel}</option>
                   {subtitleTypeOptions.map((subtitleType) => (
                     <option key={subtitleType} value={subtitleType}>
-                      {subtitleType}
+                      {subtitleType === NO_SUBTITLE_FILTER_VALUE ? noSubtitleLabel : subtitleType}
                     </option>
                   ))}
                 </select>

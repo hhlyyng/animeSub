@@ -53,6 +53,7 @@ public class TorrentTitleParserTests
     [Theory]
     [InlineData("[\u9ed2\u30cd\u30ba\u30df\u305f\u3061] \u5492\u672f\u56de\u6218 \u6b7b\u706d\u56de\u6e38 \u524d\u7bc7 / Jujutsu Kaisen: Shimetsu Kaiyuu - Zenpen - 49 (CR 1920x1080 AVC AAC MKV)", "1080p")]
     [InlineData("[Group] Anime Name - 05 (WEB 1280*720 AVC AAC MP4)", "720p")]
+    [InlineData("[Group] Anime Name - 05 (WEB 1280\u00d7720 AVC AAC MP4)", "720p")]
     public void ParseTitle_ShouldExtractResolution_FromDimensionPattern(string title, string expectedResolution)
     {
         // Act
@@ -73,5 +74,19 @@ public class TorrentTitleParserTests
 
         // Assert
         parsed.Subgroup.Should().Be(expectedSubgroup);
+    }
+
+    [Theory]
+    [InlineData("[\u8c4c\u8c46\u5b57\u5e55\u7ec4&\u98ce\u4e4b\u5723\u6bbf&LoliHouse] \u5492\u672f\u56de\u6218 / Jujutsu Kaisen - 53 [WebRip 1080p HEVC-10bit AAC][\u7b80\u7e41\u5916\u6302\u5b57\u5e55]", "\u7b80\u7e41\u5916\u6302")]
+    [InlineData("\u3010\u8c4c\u8c46\u5b57\u5e55\u7ec4&\u98ce\u4e4b\u5723\u6bbf\u5b57\u5e55\u7ec4\u301107\u6708\u65b0\u756a[\u5492\u672f\u56de\u6218 / Jujutsu_Kaisen][53][\u7b80\u4f53][1080P][MP4]", "\u7b80\u4f53")]
+    [InlineData("\u3010\u8c4c\u8c46\u5b57\u5e55\u7ec4&\u98ce\u4e4b\u5723\u6bbf\u5b57\u5e55\u7ec4\u301107\u6708\u65b0\u756a[\u5492\u672f\u56de\u6218 / Jujutsu_Kaisen][53][\u7e41\u4f53][1080P][MP4]", "\u7e41\u4f53")]
+    [InlineData("[\u7eff\u8336\u5b57\u5e55\u7ec4] \u5492\u672f\u56de\u6218 / Jujutsu Kaisen [51][WebRip][1080p][\u7e41\u65e5\u5185\u5d4c]", "\u7e41\u65e5\u5185\u5d4c")]
+    public void ParseTitle_ShouldExtractDetailedSubtitleType(string title, string expectedSubtitleType)
+    {
+        // Act
+        var parsed = _sut.ParseTitle(title);
+
+        // Assert
+        parsed.SubtitleType.Should().Be(expectedSubtitleType);
     }
 }

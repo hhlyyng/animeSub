@@ -120,18 +120,7 @@ function detectSubtitleDisplay(item: ParsedRssItem): string | null {
   if (rawSubtitle.length > 0) {
     return rawSubtitle;
   }
-
-  const source = item.title;
-
-  if (/(?:\u5185\u5d4c|\u5167\u5d4c|\u5185\u5c01|\u5167\u5c01|\u5185\u6302|\u5167\u639b|internal|softsub)/i.test(source)) {
-    return "\u5185\u5d4c";
-  }
-
-  if (/(?:\u5916\u6302|\u5916\u639b|\u5916\u7f6e|\u5916\u5c01|external|hard.?sub)/i.test(source)) {
-    return "\u5916\u7f6e";
-  }
-
-  return null;
+  return "\u65e0\u5b57\u5e55";
 }
 
 function formatUpdatedAgo(value: string): string | null {

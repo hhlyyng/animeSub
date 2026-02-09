@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
-using backend.Services.Interfaces;
 using backend.Models.Dtos;
+using backend.Services.Interfaces;
 
 namespace backend.Services.Implementations;
 
@@ -9,7 +9,7 @@ namespace backend.Services.Implementations;
 /// </summary>
 public partial class TorrentTitleParser : ITorrentTitleParser
 {
-    [GeneratedRegex(@"\b(ai2160p|ai4k|1080p|720p|4k|2160p|3840\s*[x×*]\s*2160|1920\s*[x×*]\s*1080|1280\s*[x×*]\s*720)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(ai2160p|ai4k|1080p|720p|4k|2160p|3840\s*(?:x|\u00d7|\*)\s*2160|1920\s*(?:x|\u00d7|\*)\s*1080|1280\s*(?:x|\u00d7|\*)\s*720)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
     private static partial Regex ResolutionRegex();
 
     [GeneratedRegex(@"^\s*(?:\[([^\]]+)\]|\u3010([^\u3011]+)\u3011)", RegexOptions.Compiled)]
@@ -36,8 +36,11 @@ public partial class TorrentTitleParser : ITorrentTitleParser
     [GeneratedRegex(@"(?:\u5408\u96c6|\u5168\u96c6|\u96c6\u5408|batch|complete\s*(?:season|series|collection)?|collection)", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
     private static partial Regex CollectionRegex();
 
-    [GeneratedRegex(@"(\u7b80\u7e41\u5185\u5c01|\u7c21\u7e41\u5167\u5c01|\u7b80\u4f53\u5185\u5d4c|\u7e41\u4f53\u5185\u5d4c|\u7c21\u9ad4\u5167\u5d4c|\u7e41\u9ad4\u5167\u5d4c|CHT|CHS)", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
-    private static partial Regex SubtitleTypeRegex();
+    [GeneratedRegex(@"(简繁|繁简|簡繁|繁簡|简日|簡日|繁日|简体|繁体|簡體|繁體|CHS|CHT)", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    private static partial Regex SubtitleLanguageRegex();
+
+    [GeneratedRegex(@"(内封|內封|内嵌|內嵌|外挂|外掛)", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    private static partial Regex SubtitleStyleRegex();
 
     public ParsedTorrentInfo ParseTitle(string title)
     {
@@ -54,7 +57,6 @@ public partial class TorrentTitleParser : ITorrentTitleParser
         }
 
         info.Subgroup = ExtractSubgroup(title);
-
         info.IsCollection = IsCollectionTitle(title);
 
         var episode = info.IsCollection ? null : ExtractEpisode(title);
@@ -68,10 +70,10 @@ public partial class TorrentTitleParser : ITorrentTitleParser
             info.Episode = episode.Value;
         }
 
-        var subtitleMatch = SubtitleTypeRegex().Match(title);
-        if (subtitleMatch.Success)
+        var subtitleType = ExtractSubtitleType(title);
+        if (!string.IsNullOrWhiteSpace(subtitleType))
         {
-            info.SubtitleType = NormalizeSubtitleType(subtitleMatch.Value);
+            info.SubtitleType = subtitleType;
         }
 
         return info;
@@ -87,7 +89,7 @@ public partial class TorrentTitleParser : ITorrentTitleParser
         var normalized = rawResolution
             .Trim()
             .ToLowerInvariant()
-            .Replace("×", "x", StringComparison.Ordinal)
+            .Replace("\u00d7", "x", StringComparison.Ordinal)
             .Replace("*", "x", StringComparison.Ordinal)
             .Replace(" ", string.Empty, StringComparison.Ordinal);
 
@@ -164,8 +166,8 @@ public partial class TorrentTitleParser : ITorrentTitleParser
 
     private static int? InferEpisodeFromSeasonHint(string title)
     {
-        // Some source titles only keep season marker (S2 / 第二季) without explicit episode.
-        // We treat these as the season opener fallback.
+        // Some source titles only keep season markers (S2 / 第二季) without explicit episode.
+        // Treat these as season openers.
         if (SeasonHintRegex().IsMatch(title))
         {
             return 1;
@@ -174,15 +176,64 @@ public partial class TorrentTitleParser : ITorrentTitleParser
         return null;
     }
 
-    private static string NormalizeSubtitleType(string subtitle)
+    private static string? ExtractSubtitleType(string title)
     {
-        var normalized = subtitle.Trim().ToLowerInvariant();
+        var language = ExtractSubtitleLanguage(title);
+        var style = ExtractSubtitleStyle(title);
+
+        if (language is null && style is null)
+        {
+            return null;
+        }
+
+        if (language is null)
+        {
+            return style;
+        }
+
+        if (style is null)
+        {
+            return language;
+        }
+
+        return $"{language}{style}";
+    }
+
+    private static string? ExtractSubtitleLanguage(string title)
+    {
+        var match = SubtitleLanguageRegex().Match(title);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var normalized = match.Value.Trim().ToLowerInvariant();
         return normalized switch
         {
-            "\u7b80\u7e41\u5185\u5c01" or "\u7c21\u7e41\u5167\u5c01" => "\u7b80\u7e41\u5185\u5c01",
-            "\u7b80\u4f53\u5185\u5d4c" or "\u7c21\u9ad4\u5167\u5d4c" or "chs" => "\u7b80\u4f53\u5185\u5d4c",
-            "\u7e41\u4f53\u5185\u5d4c" or "\u7e41\u9ad4\u5167\u5d4c" or "cht" => "\u7e41\u4f53\u5185\u5d4c",
-            _ => subtitle.Trim()
+            "简繁" or "繁简" or "簡繁" or "繁簡" => "简繁",
+            "简体" or "簡體" or "chs" => "简体",
+            "繁体" or "繁體" or "cht" => "繁体",
+            "简日" or "簡日" => "简日",
+            "繁日" => "繁日",
+            _ => null
+        };
+    }
+
+    private static string? ExtractSubtitleStyle(string title)
+    {
+        var match = SubtitleStyleRegex().Match(title);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        var normalized = match.Value.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "内封" or "內封" => "内封",
+            "内嵌" or "內嵌" => "内嵌",
+            "外挂" or "外掛" => "外挂",
+            _ => null
         };
     }
 
