@@ -1013,6 +1013,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                   return (
                     <DownloadEpisodeGroup
                       key={groupKey}
+                      language={language}
                       groupKey={groupKey}
                       episode={group.episode}
                       isCollectionGroup={group.type === "collection"}

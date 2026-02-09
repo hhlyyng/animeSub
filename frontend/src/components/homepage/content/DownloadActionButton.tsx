@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import DownloadIcon from "../../icon/DownloadIcon";
 import PlayTriangleIcon from "../../icon/PlayTriangleIcon";
 import { CloseIcon } from "../../icon/CloseIcon";
@@ -21,6 +21,7 @@ const RADIUS = 12;
 const STROKE_WIDTH = 2.4;
 const SIZE = 40;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+const HOVER_LOCK_MS = 300;
 
 function PauseIcon({ className }: { className?: string }) {
   return (
@@ -54,21 +55,80 @@ export function DownloadActionButton({
   secondaryAction,
 }: DownloadActionButtonProps) {
   const [isHovered, setIsHovered] = useState(false);
+  const [isHoverLocked, setIsHoverLocked] = useState(false);
+  const hoverLockTimerRef = useRef<number | null>(null);
+  const previousStateRef = useRef<DownloadActionState>(state);
+  const isPointerInsideRef = useRef(false);
   const isIdle = state === "idle";
   const canShowSecondary = state === "paused" && Boolean(secondaryAction);
   const expandedWidth = SIZE * 2 + 6;
   const secondaryDisabled = secondaryAction?.disabled ?? false;
+  const isStateChangingThisRender = previousStateRef.current !== state;
+
+  useEffect(() => {
+    return () => {
+      if (hoverLockTimerRef.current !== null) {
+        window.clearTimeout(hoverLockTimerRef.current);
+        hoverLockTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const clearHoverLockTimer = () => {
+    if (hoverLockTimerRef.current !== null) {
+      window.clearTimeout(hoverLockTimerRef.current);
+      hoverLockTimerRef.current = null;
+    }
+  };
+
+  const handleMouseEnter = () => {
+    isPointerInsideRef.current = true;
+    if (!isHoverLocked) {
+      setIsHovered(true);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    isPointerInsideRef.current = false;
+    setIsHovered(false);
+  };
+
+  useLayoutEffect(() => {
+    const previous = previousStateRef.current;
+    if (previous !== state) {
+      previousStateRef.current = state;
+      setIsHovered(false);
+      setIsHoverLocked(true);
+      clearHoverLockTimer();
+      hoverLockTimerRef.current = window.setTimeout(() => {
+        hoverLockTimerRef.current = null;
+        setIsHoverLocked(false);
+        if (isPointerInsideRef.current) {
+          setIsHovered(true);
+        }
+      }, HOVER_LOCK_MS);
+    }
+  }, [state]);
+
+  const isHoverEnabled = !isHoverLocked && !isStateChangingThisRender;
+  const effectiveIsHovered = isHovered && isHoverEnabled;
+
+  const iconHoverClass = !isHoverEnabled
+    ? ""
+    : isIdle
+      ? "group-hover:scale-110 group-hover:text-gray-900"
+      : "group-hover:scale-105";
 
   const visual = useMemo(() => {
     const normalizedProgress = clampProgress(progress);
 
     if (state === "completed") {
       return {
-        ringColor: isHovered ? "#dc2626" : "#16a34a",
-        trackColor: isHovered ? "rgba(220,38,38,0.15)" : "rgba(34,197,94,0.18)",
-        progress: isHovered ? 0 : 100,
-        icon: isHovered ? <CloseIcon className="block h-4 w-4" /> : <CheckIcon className="block h-4 w-4" />,
-        iconColor: isHovered ? "text-red-600" : "text-green-600",
+        ringColor: effectiveIsHovered ? "#dc2626" : "#16a34a",
+        trackColor: effectiveIsHovered ? "rgba(220,38,38,0.15)" : "rgba(34,197,94,0.18)",
+        progress: effectiveIsHovered ? 0 : 100,
+        icon: effectiveIsHovered ? <CloseIcon className="block h-4 w-4" /> : <CheckIcon className="block h-4 w-4" />,
+        iconColor: effectiveIsHovered ? "text-red-600" : "text-green-600",
       };
     }
 
@@ -99,21 +159,21 @@ export function DownloadActionButton({
       icon: <DownloadIcon className="block h-4 w-4" />,
       iconColor: "text-gray-600",
     };
-  }, [isHovered, progress, state]);
+  }, [effectiveIsHovered, progress, state]);
 
   const dashOffset = CIRCUMFERENCE * (1 - visual.progress / 100);
 
   return (
     <div
-      className="relative inline-flex items-center justify-end"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      style={{
-        width: canShowSecondary ? (isHovered ? expandedWidth : SIZE) : SIZE,
-        height: SIZE,
-        transition: canShowSecondary ? "width 220ms ease" : undefined,
-      }}
-    >
+        className="relative inline-flex items-center justify-end"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        style={{
+          width: canShowSecondary ? (effectiveIsHovered ? expandedWidth : SIZE) : SIZE,
+          height: SIZE,
+          transition: canShowSecondary ? "width 220ms ease" : undefined,
+        }}
+      >
       {canShowSecondary && secondaryAction && (
         <button
           type="button"
@@ -131,9 +191,9 @@ export function DownloadActionButton({
             boxShadow: "none",
             padding: 0,
             margin: 0,
-            opacity: isHovered ? 1 : 0,
-            transform: isHovered ? "translateX(0)" : "translateX(-8px)",
-            pointerEvents: isHovered ? "auto" : "none",
+            opacity: effectiveIsHovered ? 1 : 0,
+            transform: effectiveIsHovered ? "translateX(0)" : "translateX(-8px)",
+            pointerEvents: effectiveIsHovered ? "auto" : "none",
             transition: "opacity 220ms ease, transform 220ms ease",
           }}
         >
@@ -196,11 +256,7 @@ export function DownloadActionButton({
         )}
 
         <span
-          className={`relative inline-flex h-8 w-8 items-center justify-center leading-none transition-all duration-200 ${visual.iconColor} ${
-            isIdle
-              ? "group-hover:scale-110 group-hover:text-gray-900"
-              : "group-hover:scale-105"
-          }`}
+          className={`relative inline-flex h-8 w-8 items-center justify-center leading-none transition-all duration-200 ${visual.iconColor} ${iconHoverClass}`}
         >
           {visual.icon}
         </span>

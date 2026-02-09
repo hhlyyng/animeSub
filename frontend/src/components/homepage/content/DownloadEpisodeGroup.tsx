@@ -4,6 +4,7 @@ import { DownloadActionButton } from "./DownloadActionButton";
 import type { DownloadActionState } from "./DownloadActionButton";
 
 type DownloadEpisodeGroupProps = {
+  language: "zh" | "en";
   groupKey: string;
   episode: number | null;
   isCollectionGroup?: boolean;
@@ -181,6 +182,7 @@ function toDisplayTags(item: ParsedRssItem): { tags: string[]; weakTag: string |
 }
 
 export function DownloadEpisodeGroup({
+  language,
   groupKey,
   episode,
   isCollectionGroup = false,
@@ -250,7 +252,7 @@ export function DownloadEpisodeGroup({
       {!collapsed && (
         <div className="divide-y divide-gray-100">
           {rows.map(({ item, hash, canDownload, state, progress, tags, weakTag }) => {
-            const subgroup = item.subgroup?.trim() || "Unknown Group";
+            const subgroup = item.subgroup?.trim() || (language === "zh" ? "\u672a\u77e5\u5b57\u5e55\u7ec4" : "Unknown Group");
             const hasHash = hash.length > 0;
             const isBusy = hasHash ? busyHash === hash : false;
 
