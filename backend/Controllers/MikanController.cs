@@ -141,6 +141,17 @@ public class MikanController : ControllerBase
             var parsedBangumiId = TryParsePositiveInt(bangumiId);
             var bangumiDetail = await TryGetBangumiSubjectDetailAsync(parsedBangumiId);
             var expectedEpisodes = TryGetExpectedEpisodeCount(bangumiDetail);
+            var isMovieOrSingleEpisode = IsMovieOrSingleEpisodeWork(bangumiDetail, expectedEpisodes);
+
+            if (isMovieOrSingleEpisode)
+            {
+                _logger.LogInformation(
+                    "Detected movie/single-episode work for BangumiId={BangumiId}. Applying one-shot validation.",
+                    parsedBangumiId);
+                ApplyMovieOrSingleEpisodeValidation(feed);
+                UpdateLatestMetadata(feed);
+                return Ok(feed);
+            }
 
             var normalized = false;
             if (parsedBangumiId.HasValue)
@@ -673,6 +684,70 @@ public class MikanController : ControllerBase
         }
 
         return null;
+    }
+
+    private static bool IsMovieOrSingleEpisodeWork(JsonElement? bangumiDetail, int? expectedEpisodes)
+    {
+        if (expectedEpisodes == 1)
+        {
+            return true;
+        }
+
+        if (!bangumiDetail.HasValue)
+        {
+            return false;
+        }
+
+        if (TryReadString(bangumiDetail.Value, "platform", out var platform) &&
+            IsMoviePlatform(platform))
+        {
+            return true;
+        }
+
+        if (TryReadPositiveInt(bangumiDetail.Value, "total_episodes", out var totalEpisodes) &&
+            totalEpisodes == 1)
+        {
+            return true;
+        }
+
+        if (TryReadPositiveInt(bangumiDetail.Value, "eps", out var eps) &&
+            eps == 1)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsMoviePlatform(string platform)
+    {
+        var normalized = platform.Trim().ToLowerInvariant();
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        return normalized.Contains("\u5267\u573a\u7248", StringComparison.Ordinal) ||
+               normalized.Contains("\u5287\u5834\u7248", StringComparison.Ordinal) ||
+               normalized.Contains("movie", StringComparison.Ordinal) ||
+               normalized.Contains("film", StringComparison.Ordinal) ||
+               normalized.Contains("theatrical", StringComparison.Ordinal) ||
+               normalized.Contains("cinema", StringComparison.Ordinal);
+    }
+
+    private static void ApplyMovieOrSingleEpisodeValidation(MikanFeedResponse feed)
+    {
+        foreach (var item in feed.Items)
+        {
+            if (item.IsCollection)
+            {
+                continue;
+            }
+
+            item.Episode = 1;
+        }
+
+        feed.EpisodeOffset = 0;
     }
 
     private async Task<bool> TryApplyBangumiEpisodeMapNormalizationAsync(
@@ -1484,6 +1559,15 @@ public class MikanController : ControllerBase
 
         if (defaultSeason == null || string.IsNullOrWhiteSpace(defaultSeason.MikanBangumiId))
         {
+            return;
+        }
+
+        if (!Regex.IsMatch(defaultSeason.MikanBangumiId, @"^\d+$"))
+        {
+            _logger.LogInformation(
+                "Skip caching non-numeric MikanBangumiId for BangumiId={BangumiId}, MikanId={MikanId}",
+                bangumiId,
+                defaultSeason.MikanBangumiId);
             return;
         }
 

@@ -596,6 +596,43 @@ public class MikanControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task GetFeed_WhenBangumiIsMovieOrSingleEpisode_ValidatesAsEpisodeOneAndSkipsOffsetStrategies()
+    {
+        // Arrange
+        _mikanClientMock
+            .Setup(s => s.GetParsedFeedAsync("23119"))
+            .ReturnsAsync(new MikanFeedResponse
+            {
+                SeasonName = "Steins;Gate 剧场版",
+                Items = new List<ParsedRssItem>
+                {
+                    new() { Title = "Steins;Gate Movie EP25", TorrentHash = "h1", Episode = 25, PublishedAt = DateTime.UtcNow.AddDays(-1) },
+                    new() { Title = "Steins;Gate Movie EP26", TorrentHash = "h2", Episode = 26, PublishedAt = DateTime.UtcNow },
+                    new() { Title = "Steins;Gate Movie Collection", TorrentHash = "h3", Episode = null, IsCollection = true, PublishedAt = DateTime.UtcNow.AddHours(-1) }
+                }
+            });
+
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectDetailAsync(23119))
+            .ReturnsAsync(ParseJson("{\"eps\":1,\"platform\":\"剧场版\",\"name_cn\":\"命运石之门 负荷领域的既视感\"}"));
+
+        // Act
+        var response = await _sut.GetFeed("23119", "23119");
+
+        // Assert
+        response.Result.Should().BeOfType<OkObjectResult>();
+        var payload = ((OkObjectResult)response.Result!).Value.Should().BeAssignableTo<MikanFeedResponse>().Subject;
+        payload.EpisodeOffset.Should().Be(0);
+        payload.LatestEpisode.Should().Be(1);
+
+        payload.Items.Where(i => !i.IsCollection).Select(i => i.Episode).Should().OnlyContain(ep => ep == 1);
+        payload.Items.Single(i => i.IsCollection).Episode.Should().BeNull();
+
+        _bangumiClientMock.Verify(s => s.GetSubjectEpisodesAsync(23119, It.IsAny<int>(), It.IsAny<int>()), Times.Never);
+        _bangumiClientMock.Verify(s => s.GetSubjectRelationsAsync(23119), Times.Never);
+    }
+
+    [Fact]
     public async Task PauseTorrent_WhenManualRecordExists_UpdatesStatusToPending()
     {
         // Arrange

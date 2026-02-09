@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using HtmlAgilityPack;
@@ -17,6 +18,8 @@ namespace backend.Services.Implementations;
 /// </summary>
 public partial class MikanClient : IMikanClient
 {
+    private const string SearchPseudoMikanIdPrefix = "search:";
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<MikanClient> _logger;
     private readonly MikanConfiguration _config;
@@ -54,6 +57,11 @@ public partial class MikanClient : IMikanClient
 
     public string BuildRssUrl(string mikanBangumiId, string? subgroupId = null)
     {
+        if (TryResolveSearchQueryFromPseudoMikanId(mikanBangumiId, out var searchQuery))
+        {
+            return $"RSS/Search?searchstr={EncodeSearchQueryForMikan(searchQuery)}";
+        }
+
         var url = $"RSS/Bangumi?bangumiId={mikanBangumiId}";
         if (!string.IsNullOrEmpty(subgroupId))
         {
@@ -191,44 +199,127 @@ public partial class MikanClient : IMikanClient
 
     public async Task<MikanSearchResult?> SearchAnimeAsync(string title)
     {
-        var searchUrl = $"Home/Search?searchstr={Uri.EscapeDataString(title)}";
-        _logger.LogInformation("Searching Mikan HTML for: {Title}, URL: {SearchUrl}", title, searchUrl);
+        var queries = BuildSearchQueries(title);
 
-        try
+        foreach (var query in queries)
         {
-            var response = await _httpClient.GetAsync(searchUrl);
-            response.EnsureSuccessStatusCode();
-            _logger.LogInformation("Mikan search response status: {Status}", response.StatusCode);
+            var searchUrl = $"Home/Search?searchstr={query.QueryValue}";
+            _logger.LogInformation("Searching Mikan HTML for: {Title}, URL: {SearchUrl}", title, searchUrl);
 
-            var htmlContent = await response.Content.ReadAsStringAsync();
-            _logger.LogInformation("Mikan search HTML content length: {Length} chars", htmlContent.Length);
-
-            var result = ParseSearchHtml(htmlContent, title);
-            if (result != null)
+            try
             {
-                _logger.LogInformation(
-                    "Search result found: AnimeTitle={AnimeTitle}, SeasonsCount={SeasonsCount}, DefaultSeason={DefaultSeason}",
-                    result.AnimeTitle,
-                    result.Seasons.Count,
-                    result.DefaultSeason);
-            }
-            else
-            {
-                _logger.LogWarning("Search result is null for: {Title}", title);
-            }
+                var response = await _httpClient.GetAsync(searchUrl);
+                response.EnsureSuccessStatusCode();
+                _logger.LogInformation("Mikan search response status: {Status}", response.StatusCode);
 
-            return result;
+                var htmlContent = await response.Content.ReadAsStringAsync();
+                _logger.LogInformation("Mikan search HTML content length: {Length} chars", htmlContent.Length);
+
+                var result = ParseSearchHtml(htmlContent, title);
+                if (result != null)
+                {
+                    _logger.LogInformation(
+                        "Search result found: AnimeTitle={AnimeTitle}, SeasonsCount={SeasonsCount}, DefaultSeason={DefaultSeason}",
+                        result.AnimeTitle,
+                        result.Seasons.Count,
+                        result.DefaultSeason);
+                    return result;
+                }
+
+                _logger.LogWarning("Search result is null for: {Title}, mode={Mode}", title, query.Mode);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "Failed to search Mikan HTML for title: {Title}, mode={Mode}", title, query.Mode);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error parsing Mikan search result for: {Title}, mode={Mode}", title, query.Mode);
+                return null;
+            }
         }
-        catch (HttpRequestException ex)
+
+        return null;
+    }
+
+    private static List<(string QueryValue, string Mode)> BuildSearchQueries(string title)
+    {
+        var queries = new List<(string QueryValue, string Mode)>();
+        var dedupe = new HashSet<string>(StringComparer.Ordinal);
+
+        AddQueryCandidate(queries, dedupe, EncodeSearchQueryForMikan(title), "form-encoded");
+
+        var plusQuery = TryBuildPlusJoinedSearchQuery(title);
+        AddQueryCandidate(queries, dedupe, plusQuery, "plus-joined");
+        AddQueryCandidate(queries, dedupe, Uri.EscapeDataString(title), "escape-data-string");
+
+        return queries;
+    }
+
+    private static void AddQueryCandidate(
+        ICollection<(string QueryValue, string Mode)> queries,
+        ISet<string> dedupe,
+        string? queryValue,
+        string mode)
+    {
+        if (string.IsNullOrWhiteSpace(queryValue))
         {
-            _logger.LogError(ex, "Failed to search Mikan HTML for title: {Title}", title);
+            return;
+        }
+
+        if (!dedupe.Add(queryValue))
+        {
+            return;
+        }
+
+        queries.Add((queryValue, mode));
+    }
+
+    private static string EncodeSearchQueryForMikan(string title)
+    {
+        return WebUtility.UrlEncode(title);
+    }
+
+    private static string? TryBuildPlusJoinedSearchQuery(string title)
+    {
+        var tokens = title
+            .Split([' ', '\t', '\r', '\n', '\u3000'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (tokens.Length < 2)
+        {
             return null;
         }
-        catch (Exception ex)
+
+        return string.Join("+", tokens.Select(EncodeSearchQueryForMikan));
+    }
+
+    private static bool TryResolveSearchQueryFromPseudoMikanId(string mikanBangumiId, out string query)
+    {
+        query = string.Empty;
+        if (string.IsNullOrWhiteSpace(mikanBangumiId))
         {
-            _logger.LogError(ex, "Error parsing Mikan search result for: {Title}", title);
-            return null;
+            return false;
         }
+
+        if (!mikanBangumiId.StartsWith(SearchPseudoMikanIdPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var raw = mikanBangumiId[SearchPseudoMikanIdPrefix.Length..].Trim();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        query = raw;
+        return true;
+    }
+
+    private static string BuildSearchPseudoMikanId(string searchTerm)
+    {
+        return $"{SearchPseudoMikanIdPrefix}{searchTerm.Trim()}";
     }
 
     private MikanSearchResult? ParseSearchHtml(string htmlContent, string searchTerm)
@@ -242,6 +333,12 @@ public partial class MikanClient : IMikanClient
         var bangumiLinks = doc.DocumentNode.SelectNodes("//a[contains(@href, '/Home/Bangumi/')]");
         if (bangumiLinks == null || bangumiLinks.Count == 0)
         {
+            var fallback = TryParseEpisodeSearchFallback(doc, searchTerm);
+            if (fallback != null)
+            {
+                return fallback;
+            }
+
             _logger.LogWarning("No Bangumi links found in search results");
             return null;
         }
@@ -325,6 +422,36 @@ public partial class MikanClient : IMikanClient
         searchResult.DefaultSeason = Math.Max(0, searchResult.Seasons.Count - 1);
         _logger.LogInformation("Found {Count} seasons via Bangumi links", searchResult.Seasons.Count);
         return searchResult;
+    }
+
+    private MikanSearchResult? TryParseEpisodeSearchFallback(HtmlDocument doc, string searchTerm)
+    {
+        var episodeLinks = doc.DocumentNode.SelectNodes("//a[contains(@href, '/Home/Episode/')]");
+        if (episodeLinks == null || episodeLinks.Count == 0)
+        {
+            return null;
+        }
+
+        _logger.LogInformation(
+            "Bangumi links not found; using RSS/Search fallback for term: {SearchTerm}, EpisodeLinks={Count}",
+            searchTerm,
+            episodeLinks.Count);
+
+        return new MikanSearchResult
+        {
+            AnimeTitle = searchTerm,
+            Seasons = new List<MikanSeasonInfo>
+            {
+                new()
+                {
+                    SeasonName = "Search Results",
+                    MikanBangumiId = BuildSearchPseudoMikanId(searchTerm),
+                    Year = 0,
+                    SeasonNumber = 1
+                }
+            },
+            DefaultSeason = 0
+        };
     }
 
     private static int? TryExtractYear(string text)
