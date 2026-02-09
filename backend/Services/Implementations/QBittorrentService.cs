@@ -229,6 +229,13 @@ public class QBittorrentService : IQBittorrentService
 
         try
         {
+            var locationReady = await TryEnsureTorrentLocationAsync(hash, _config.DefaultSavePath);
+            if (!locationReady)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to prepare save path for torrent {hash}. Target path: {_config.DefaultSavePath}");
+            }
+
             var result = await SendTorrentActionAsync("/api/v2/torrents/resume", hash);
             if (result.StatusCode == HttpStatusCode.NotFound)
             {
@@ -347,6 +354,17 @@ public class QBittorrentService : IQBittorrentService
             _logger.LogWarning(
                 "qBittorrent add API returned success but torrent was not visible after verification window. Hash={Hash}, Source={Source}",
                 normalizedHash,
+                source);
+            return false;
+        }
+
+        var locationReady = await TryEnsureTorrentLocationAsync(normalizedHash, _config.DefaultSavePath);
+        if (!locationReady)
+        {
+            _logger.LogWarning(
+                "Torrent added but failed to apply configured save path. Hash={Hash}, TargetPath={TargetPath}, Source={Source}",
+                normalizedHash,
+                _config.DefaultSavePath,
                 source);
             return false;
         }
@@ -623,6 +641,59 @@ public class QBittorrentService : IQBittorrentService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error in file-upload fallback for torrent: {Url}", torrentUrl);
+            return false;
+        }
+    }
+
+    private async Task<bool> TryEnsureTorrentLocationAsync(string hash, string? savePath)
+    {
+        if (string.IsNullOrWhiteSpace(hash) || string.IsNullOrWhiteSpace(savePath))
+        {
+            return true;
+        }
+
+        try
+        {
+            var request = CreateRequest(HttpMethod.Post, "/api/v2/torrents/setLocation");
+            request.Content = new FormUrlEncodedContent(new[]
+            {
+                new KeyValuePair<string, string>("hashes", hash),
+                new KeyValuePair<string, string>("location", savePath)
+            });
+
+            using var response = await _httpClient.SendAsync(request);
+            var body = await response.Content.ReadAsStringAsync();
+            if (IsHttpSuccessStatus(response.StatusCode))
+            {
+                _logger.LogInformation("Ensured torrent save path. Hash={Hash}, SavePath={SavePath}", hash, savePath);
+                return true;
+            }
+
+            _logger.LogWarning(
+                "Failed to set torrent location. Hash={Hash}, SavePath={SavePath}, Status={Status}, Body={Body}",
+                hash,
+                savePath,
+                response.StatusCode,
+                body);
+            return false;
+        }
+        catch (QBittorrentUnavailableException)
+        {
+            throw;
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "qBittorrent set-location request timed out. Hash={Hash}", hash);
+            throw MarkEndpointUnavailable(ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "qBittorrent set-location request failed. Hash={Hash}", hash);
+            throw MarkEndpointUnavailable(ex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error setting torrent location. Hash={Hash}, SavePath={SavePath}", hash, savePath);
             return false;
         }
     }
