@@ -9,7 +9,7 @@ namespace backend.Services.Implementations;
 /// </summary>
 public partial class TorrentTitleParser : ITorrentTitleParser
 {
-    [GeneratedRegex(@"\b(1080p|720p|4k|2160p)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(ai2160p|ai4k|1080p|720p|4k|2160p|3840\s*[x×*]\s*2160|1920\s*[x×*]\s*1080|1280\s*[x×*]\s*720)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
     private static partial Regex ResolutionRegex();
 
     [GeneratedRegex(@"^\s*(?:\[([^\]]+)\]|\u3010([^\u3011]+)\u3011)", RegexOptions.Compiled)]
@@ -84,11 +84,19 @@ public partial class TorrentTitleParser : ITorrentTitleParser
             return null;
         }
 
-        return rawResolution.Trim().ToLowerInvariant() switch
+        var normalized = rawResolution
+            .Trim()
+            .ToLowerInvariant()
+            .Replace("×", "x", StringComparison.Ordinal)
+            .Replace("*", "x", StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal);
+
+        return normalized switch
         {
-            "2160p" or "4k" => "4K",
-            "1080p" => "1080p",
-            "720p" => "720p",
+            "ai2160p" or "ai4k" => "AI4K",
+            "2160p" or "4k" or "3840x2160" => "4K",
+            "1080p" or "1920x1080" => "1080p",
+            "720p" or "1280x720" => "720p",
             _ => null
         };
     }

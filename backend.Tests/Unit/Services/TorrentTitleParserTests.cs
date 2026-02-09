@@ -37,6 +37,31 @@ public class TorrentTitleParserTests
         parsed.Resolution.Should().Be("1080p");
     }
 
+    [Fact]
+    public void ParseTitle_ShouldNormalizeAi2160pToAi4k()
+    {
+        // Arrange
+        var title = "[\u6cb8\u73ed\u4e9a\u9a6c\u5236\u4f5c\u7ec4] \u5730\u72f1\u4e50 \u7b2c\u4e8c\u5b63 - 02 [CR WebRip AI2160p HEVC OPUS][\u7b80\u7e41\u5185\u5c01\u5b57\u5e55]";
+
+        // Act
+        var parsed = _sut.ParseTitle(title);
+
+        // Assert
+        parsed.Resolution.Should().Be("AI4K");
+    }
+
+    [Theory]
+    [InlineData("[\u9ed2\u30cd\u30ba\u30df\u305f\u3061] \u5492\u672f\u56de\u6218 \u6b7b\u706d\u56de\u6e38 \u524d\u7bc7 / Jujutsu Kaisen: Shimetsu Kaiyuu - Zenpen - 49 (CR 1920x1080 AVC AAC MKV)", "1080p")]
+    [InlineData("[Group] Anime Name - 05 (WEB 1280*720 AVC AAC MP4)", "720p")]
+    public void ParseTitle_ShouldExtractResolution_FromDimensionPattern(string title, string expectedResolution)
+    {
+        // Act
+        var parsed = _sut.ParseTitle(title);
+
+        // Assert
+        parsed.Resolution.Should().Be(expectedResolution);
+    }
+
     [Theory]
     [InlineData("[ANi] You and I Are Polar Opposites - 05 [1080P][CHT]", "ANi")]
     [InlineData("\u3010MoeSub\u3011 Anime Title - 04 [1080p]", "MoeSub")]
