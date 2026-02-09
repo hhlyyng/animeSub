@@ -14,6 +14,7 @@ export interface MikanSeasonInfo {
   seasonName: string;
   mikanBangumiId: string;
   year: number;
+  seasonNumber?: number;
 }
 
 export interface MikanSearchResult {
@@ -28,6 +29,10 @@ export interface MikanFeedResponse {
   availableSubgroups: string[];
   availableResolutions: string[];
   availableSubtitleTypes: string[];
+  latestEpisode?: number | null;
+  latestPublishedAt?: string | null;
+  latestTitle?: string | null;
+  episodeOffset?: number;
 }
 
 export interface ParsedRssItem {
@@ -35,11 +40,15 @@ export interface ParsedRssItem {
   torrentUrl: string;
   magnetLink: string;
   torrentHash: string;
+  canDownload?: boolean;
+  fileSize?: number;
+  formattedSize?: string;
   publishedAt: string;
   resolution: string | null;
   subgroup: string | null;
   subtitleType: string | null;
   episode: number | null;
+  isCollection?: boolean;
 }
 
 export interface DownloadPreferences {

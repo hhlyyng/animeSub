@@ -1,10 +1,14 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
 using backend.Models.Configuration;
+using backend.Services.Exceptions;
 using backend.Services.Interfaces;
 using backend.Data.Entities;
 
@@ -17,7 +21,10 @@ namespace backend.Services.Implementations;
 public class QBittorrentService : IQBittorrentService
 {
     private const int MaxFailedAttemptsPerCredential = 2;
-    private static readonly ConcurrentDictionary<string, int> FailedAttemptsByCredential = new();
+    private const int AddVerificationMaxAttempts = 3;
+    private static readonly TimeSpan AddVerificationDelay = TimeSpan.FromMilliseconds(400);
+    private static readonly ConcurrentDictionary<string, CredentialFailureState> FailedAttemptsByCredential = new();
+    private static readonly ConcurrentDictionary<string, EndpointSuspendState> SuspendedEndpoints = new();
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<QBittorrentService> _logger;
@@ -26,6 +33,10 @@ public class QBittorrentService : IQBittorrentService
     private string _sessionCookie = string.Empty;
     private DateTime _sessionExpiry = DateTime.MinValue;
     private readonly SemaphoreSlim _loginLock = new(1, 1);
+
+    private sealed record CredentialFailureState(int Failures, DateTime BlockedUntilUtc);
+    private sealed record EndpointSuspendState(DateTime SuspendedUntilUtc, string Reason);
+    private sealed record LoginAttemptResult(HttpStatusCode StatusCode, string Body, string? SessionCookie);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -70,44 +81,38 @@ public class QBittorrentService : IQBittorrentService
         {
             await EnsureAuthenticatedAsync();
 
-            var formData = new List<KeyValuePair<string, string>>
-            {
-                new("urls", torrentUrl)
-            };
-
-            var actualSavePath = savePath ?? _config.DefaultSavePath;
-            var actualCategory = category ?? _config.Category;
-            var actualPaused = paused ?? _config.PauseTorrentAfterAdd;
-
-            if (!string.IsNullOrEmpty(actualSavePath))
-            {
-                formData.Add(new("savepath", actualSavePath));
-            }
-
-            if (!string.IsNullOrEmpty(actualCategory))
-            {
-                formData.Add(new("category", actualCategory));
-            }
-
-            if (actualPaused)
-            {
-                formData.Add(new("paused", "true"));
-            }
+            var formData = BuildAddOptions(savePath, category, paused);
+            formData.Insert(0, new KeyValuePair<string, string>("urls", torrentUrl));
 
             var request = CreateRequest(HttpMethod.Post, "/api/v2/torrents/add");
             request.Content = new FormUrlEncodedContent(formData);
 
             var response = await _httpClient.SendAsync(request);
-            if (response.IsSuccessStatusCode)
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            if (IsAddTorrentResponseSuccessful(response.StatusCode, responseBody))
             {
                 _logger.LogInformation("Added torrent: {Url}", torrentUrl);
                 return true;
             }
 
-            var errorContent = await response.Content.ReadAsStringAsync();
             _logger.LogWarning("Failed to add torrent. Status: {Status}, Response: {Response}",
-                response.StatusCode, errorContent);
+                response.StatusCode, responseBody);
             return false;
+        }
+        catch (QBittorrentUnavailableException)
+        {
+            throw;
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "qBittorrent add request timed out for torrent: {Url}", torrentUrl);
+            throw MarkEndpointUnavailable(ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "qBittorrent add request failed for torrent: {Url}", torrentUrl);
+            throw MarkEndpointUnavailable(ex);
         }
         catch (Exception ex)
         {
@@ -138,7 +143,27 @@ public class QBittorrentService : IQBittorrentService
             }
 
             var json = await response.Content.ReadAsStringAsync();
-            return JsonSerializer.Deserialize<List<QBTorrentInfo>>(json, JsonOptions) ?? new List<QBTorrentInfo>();
+            var torrents = JsonSerializer.Deserialize<List<QBTorrentInfo>>(json, JsonOptions) ?? new List<QBTorrentInfo>();
+            foreach (var torrent in torrents)
+            {
+                torrent.Progress = NormalizeProgressPercent(torrent.Progress);
+            }
+
+            return torrents;
+        }
+        catch (QBittorrentUnavailableException)
+        {
+            throw;
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "qBittorrent get-torrents request timed out");
+            throw MarkEndpointUnavailable(ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "qBittorrent get-torrents request failed");
+            throw MarkEndpointUnavailable(ex);
         }
         catch (Exception ex)
         {
@@ -162,57 +187,77 @@ public class QBittorrentService : IQBittorrentService
 
     public async Task PauseTorrentAsync(string hash)
     {
+        await EnsureAuthenticatedAsync();
+
         try
         {
-            await EnsureAuthenticatedAsync();
-
-            var request = CreateRequest(HttpMethod.Post, "/api/v2/torrents/pause");
-            request.Content = new FormUrlEncodedContent(new[]
+            var result = await SendTorrentActionAsync("/api/v2/torrents/pause", hash);
+            if (result.StatusCode == HttpStatusCode.NotFound)
             {
-                new KeyValuePair<string, string>("hashes", hash)
-            });
+                _logger.LogWarning("qBittorrent endpoint /api/v2/torrents/pause returned 404, fallback to /api/v2/torrents/stop");
+                result = await SendTorrentActionAsync("/api/v2/torrents/stop", hash);
+            }
 
-            var response = await _httpClient.SendAsync(request);
-            if (response.IsSuccessStatusCode)
+            if (IsHttpSuccessStatus(result.StatusCode))
             {
                 _logger.LogInformation("Paused torrent: {Hash}", hash);
+                return;
             }
-            else
-            {
-                _logger.LogWarning("Failed to pause torrent {Hash}. Status: {Status}", hash, response.StatusCode);
-            }
+
+            throw new InvalidOperationException(
+                $"Failed to pause torrent {hash}. Status: {result.StatusCode}. Body: {result.Body}");
         }
-        catch (Exception ex)
+        catch (QBittorrentUnavailableException)
         {
-            _logger.LogError(ex, "Error pausing torrent: {Hash}", hash);
+            throw;
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "qBittorrent pause request timed out. Hash={Hash}", hash);
+            throw MarkEndpointUnavailable(ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "qBittorrent pause request failed. Hash={Hash}", hash);
+            throw MarkEndpointUnavailable(ex);
         }
     }
 
     public async Task ResumeTorrentAsync(string hash)
     {
+        await EnsureAuthenticatedAsync();
+
         try
         {
-            await EnsureAuthenticatedAsync();
-
-            var request = CreateRequest(HttpMethod.Post, "/api/v2/torrents/resume");
-            request.Content = new FormUrlEncodedContent(new[]
+            var result = await SendTorrentActionAsync("/api/v2/torrents/resume", hash);
+            if (result.StatusCode == HttpStatusCode.NotFound)
             {
-                new KeyValuePair<string, string>("hashes", hash)
-            });
+                _logger.LogWarning("qBittorrent endpoint /api/v2/torrents/resume returned 404, fallback to /api/v2/torrents/start");
+                result = await SendTorrentActionAsync("/api/v2/torrents/start", hash);
+            }
 
-            var response = await _httpClient.SendAsync(request);
-            if (response.IsSuccessStatusCode)
+            if (IsHttpSuccessStatus(result.StatusCode))
             {
                 _logger.LogInformation("Resumed torrent: {Hash}", hash);
+                return;
             }
-            else
-            {
-                _logger.LogWarning("Failed to resume torrent {Hash}. Status: {Status}", hash, response.StatusCode);
-            }
+
+            throw new InvalidOperationException(
+                $"Failed to resume torrent {hash}. Status: {result.StatusCode}. Body: {result.Body}");
         }
-        catch (Exception ex)
+        catch (QBittorrentUnavailableException)
         {
-            _logger.LogError(ex, "Error resuming torrent: {Hash}", hash);
+            throw;
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "qBittorrent resume request timed out. Hash={Hash}", hash);
+            throw MarkEndpointUnavailable(ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "qBittorrent resume request failed. Hash={Hash}", hash);
+            throw MarkEndpointUnavailable(ex);
         }
     }
 
@@ -241,6 +286,20 @@ public class QBittorrentService : IQBittorrentService
                 return false;
             }
         }
+        catch (QBittorrentUnavailableException)
+        {
+            throw;
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "qBittorrent delete request timed out. Hash={Hash}", hash);
+            throw MarkEndpointUnavailable(ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "qBittorrent delete request failed. Hash={Hash}", hash);
+            throw MarkEndpointUnavailable(ex);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error deleting torrent: {Hash}", hash);
@@ -256,18 +315,44 @@ public class QBittorrentService : IQBittorrentService
         DownloadSource source,
         int? subscriptionId = null)
     {
-        var success = await AddTorrentAsync(torrentUrl, savePath: null, category: "anime");
+        const string category = "anime";
+        var normalizedHash = torrentHash.Trim().ToUpperInvariant();
+        var baselineCount = await TryGetTorrentCountAsync(category);
 
-        if (success)
-        {
-            _logger.LogInformation("Added torrent with tracking: Hash={Hash}, Source={Source}", torrentHash, source);
-        }
-        else
+        var success = await AddTorrentAsync(torrentUrl, savePath: null, category: category);
+
+        if (!success)
         {
             _logger.LogWarning("Failed to add torrent with tracking: Hash={Hash}, Source={Source}", torrentHash, source);
+            return false;
         }
 
-        return success;
+        var visibleInClient = await WaitUntilTorrentVisibleAsync(normalizedHash, baselineCount, category);
+        if (!visibleInClient && IsHttpTorrentUrl(torrentUrl))
+        {
+            _logger.LogWarning(
+                "qBittorrent add-by-url succeeded but torrent is not visible yet. Trying file-upload fallback. Hash={Hash}, Source={Source}",
+                normalizedHash,
+                source);
+
+            var fallbackAdded = await AddTorrentByFileUploadAsync(torrentUrl, savePath: null, category: category, paused: null);
+            if (fallbackAdded)
+            {
+                visibleInClient = await WaitUntilTorrentVisibleAsync(normalizedHash, baselineCount, category);
+            }
+        }
+
+        if (!visibleInClient)
+        {
+            _logger.LogWarning(
+                "qBittorrent add API returned success but torrent was not visible after verification window. Hash={Hash}, Source={Source}",
+                normalizedHash,
+                source);
+            return false;
+        }
+
+        _logger.LogInformation("Added torrent with tracking: Hash={Hash}, Source={Source}", normalizedHash, source);
+        return true;
     }
 
     public async Task<int> SyncManualDownloadsProgressAsync()
@@ -302,23 +387,25 @@ public class QBittorrentService : IQBittorrentService
 
     private async Task EnsureAuthenticatedAsync()
     {
-        ValidateCredentialPolicy();
+        ValidateAvailabilityPolicy();
 
         if (!string.IsNullOrEmpty(_sessionCookie) && DateTime.UtcNow < _sessionExpiry)
         {
             return;
         }
 
+        ValidateCredentialPolicy();
+
         await _loginLock.WaitAsync();
         try
         {
-            ValidateCredentialPolicy();
-
             if (!string.IsNullOrEmpty(_sessionCookie) && DateTime.UtcNow < _sessionExpiry)
             {
                 return;
             }
 
+            ValidateAvailabilityPolicy();
+            ValidateCredentialPolicy();
             await LoginAsync();
         }
         finally
@@ -332,41 +419,99 @@ public class QBittorrentService : IQBittorrentService
         var credentialKey = BuildCredentialKey();
         var loginUrl = $"{BaseUrl}/api/v2/auth/login";
 
-        var formData = new FormUrlEncodedContent(new[]
+        try
+        {
+            var firstAttempt = await SendLoginRequestAsync(loginUrl);
+            if (!IsLoginSuccessful(firstAttempt))
+            {
+                RecordFailedAttempt(credentialKey);
+                _logger.LogError("qBittorrent login failed. Status: {Status}, Body: {Body}",
+                    firstAttempt.StatusCode, firstAttempt.Body);
+                throw new InvalidOperationException(
+                    $"qBittorrent login failed with status {firstAttempt.StatusCode}. Body: {firstAttempt.Body}");
+            }
+
+            var sessionCookie = firstAttempt.SessionCookie;
+            LoginAttemptResult? retryAttempt = null;
+
+            if (string.IsNullOrWhiteSpace(sessionCookie))
+            {
+                _logger.LogWarning("qBittorrent login returned Ok but no SID cookie. Retrying once.");
+                retryAttempt = await SendLoginRequestAsync(loginUrl);
+                if (IsLoginSuccessful(retryAttempt))
+                {
+                    sessionCookie = retryAttempt.SessionCookie;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(sessionCookie) && !string.IsNullOrWhiteSpace(_sessionCookie))
+            {
+                if (await IsSessionStillValidAsync())
+                {
+                    sessionCookie = _sessionCookie;
+                    _logger.LogWarning("Reusing existing qBittorrent session because login response did not include SID cookie.");
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(sessionCookie))
+            {
+                RecordFailedAttempt(credentialKey);
+                _logger.LogError(
+                    "qBittorrent login succeeded but no session cookie received. FirstBody: {FirstBody}, RetryBody: {RetryBody}",
+                    firstAttempt.Body,
+                    retryAttempt?.Body ?? "<no-retry>");
+                throw new InvalidOperationException("qBittorrent login succeeded but no session cookie received");
+            }
+
+            _sessionCookie = sessionCookie;
+            _sessionExpiry = DateTime.UtcNow.AddMinutes(50);
+            FailedAttemptsByCredential.TryRemove(credentialKey, out _);
+            SuspendedEndpoints.TryRemove(BuildEndpointKey(), out _);
+            _logger.LogInformation("Successfully authenticated with qBittorrent at {BaseUrl}", BaseUrl);
+        }
+        catch (TaskCanceledException ex)
+        {
+            _logger.LogError(ex, "Failed to connect to qBittorrent at {BaseUrl}", BaseUrl);
+            throw MarkEndpointUnavailable(ex);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "Failed to connect to qBittorrent at {BaseUrl}", BaseUrl);
+            throw MarkEndpointUnavailable(ex);
+        }
+    }
+
+    private async Task<LoginAttemptResult> SendLoginRequestAsync(string loginUrl)
+    {
+        using var formData = new FormUrlEncodedContent(new[]
         {
             new KeyValuePair<string, string>("username", _config.Username),
             new KeyValuePair<string, string>("password", _config.Password)
         });
 
+        using var response = await _httpClient.PostAsync(loginUrl, formData);
+        var body = await response.Content.ReadAsStringAsync();
+        var sessionCookie = ExtractSessionCookie(response);
+        return new LoginAttemptResult(response.StatusCode, body.Trim(), sessionCookie);
+    }
+
+    private static bool IsLoginSuccessful(LoginAttemptResult attempt)
+    {
+        return attempt.StatusCode == HttpStatusCode.OK &&
+               string.Equals(attempt.Body, "Ok.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<bool> IsSessionStillValidAsync()
+    {
         try
         {
-            var response = await _httpClient.PostAsync(loginUrl, formData);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                RecordFailedAttempt(credentialKey);
-                _logger.LogError("qBittorrent login failed. Status: {Status}", response.StatusCode);
-                throw new InvalidOperationException($"qBittorrent login failed with status {response.StatusCode}");
-            }
-
-            _sessionCookie = ExtractSessionCookie(response) ?? string.Empty;
-
-            if (string.IsNullOrEmpty(_sessionCookie))
-            {
-                RecordFailedAttempt(credentialKey);
-                _logger.LogError("qBittorrent login succeeded but no session cookie received");
-                throw new InvalidOperationException("qBittorrent login succeeded but no session cookie received");
-            }
-
-            _sessionExpiry = DateTime.UtcNow.AddMinutes(50);
-            FailedAttemptsByCredential.TryRemove(credentialKey, out _);
-            _logger.LogInformation("Successfully authenticated with qBittorrent at {BaseUrl}", BaseUrl);
+            var request = CreateRequest(HttpMethod.Get, "/api/v2/app/version");
+            using var response = await _httpClient.SendAsync(request);
+            return response.IsSuccessStatusCode;
         }
-        catch (HttpRequestException ex)
+        catch
         {
-            RecordFailedAttempt(credentialKey);
-            _logger.LogError(ex, "Failed to connect to qBittorrent at {BaseUrl}", BaseUrl);
-            throw;
+            return false;
         }
     }
 
@@ -376,13 +521,207 @@ public class QBittorrentService : IQBittorrentService
         {
             foreach (var cookie in cookies)
             {
-                if (cookie.StartsWith("SID=", StringComparison.OrdinalIgnoreCase))
+                var trimmedCookie = cookie.Trim();
+                if (trimmedCookie.StartsWith("SID=", StringComparison.OrdinalIgnoreCase))
                 {
-                    return cookie.Split(';')[0];
+                    return trimmedCookie.Split(';', 2)[0];
                 }
             }
         }
         return null;
+    }
+
+    private static bool IsAddTorrentResponseSuccessful(HttpStatusCode statusCode, string responseBody)
+    {
+        if (!IsHttpSuccessStatus(statusCode))
+        {
+            return false;
+        }
+
+        var body = responseBody.Trim();
+        if (string.IsNullOrEmpty(body))
+        {
+            return true;
+        }
+
+        return !string.Equals(body, "Fails.", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsHttpSuccessStatus(HttpStatusCode statusCode)
+    {
+        var numeric = (int)statusCode;
+        return numeric >= 200 && numeric < 300;
+    }
+
+    private async Task<(HttpStatusCode StatusCode, string Body)> SendTorrentActionAsync(string endpoint, string hash)
+    {
+        var request = CreateRequest(HttpMethod.Post, endpoint);
+        request.Content = new FormUrlEncodedContent(new[]
+        {
+            new KeyValuePair<string, string>("hashes", hash)
+        });
+
+        using var response = await _httpClient.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+        return (response.StatusCode, body);
+    }
+
+    private async Task<bool> AddTorrentByFileUploadAsync(string torrentUrl, string? savePath, string? category, bool? paused)
+    {
+        try
+        {
+            await EnsureAuthenticatedAsync();
+
+            using var sourceResponse = await _httpClient.GetAsync(torrentUrl);
+            if (!sourceResponse.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "Failed to download torrent file for fallback upload. Url={Url}, Status={Status}",
+                    torrentUrl,
+                    sourceResponse.StatusCode);
+                return false;
+            }
+
+            var payload = await sourceResponse.Content.ReadAsByteArrayAsync();
+            if (payload.Length == 0)
+            {
+                _logger.LogWarning("Downloaded torrent file is empty. Url={Url}", torrentUrl);
+                return false;
+            }
+
+            var filename = TryResolveTorrentFilename(torrentUrl);
+            using var multipart = new MultipartFormDataContent();
+            using var fileContent = new ByteArrayContent(payload);
+            fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/x-bittorrent");
+            multipart.Add(fileContent, "torrents", filename);
+
+            var options = BuildAddOptions(savePath, category, paused);
+            foreach (var option in options)
+            {
+                multipart.Add(new StringContent(option.Value), option.Key);
+            }
+
+            var request = CreateRequest(HttpMethod.Post, "/api/v2/torrents/add");
+            request.Content = multipart;
+
+            var response = await _httpClient.SendAsync(request);
+            var responseBody = await response.Content.ReadAsStringAsync();
+
+            if (IsAddTorrentResponseSuccessful(response.StatusCode, responseBody))
+            {
+                _logger.LogInformation("Added torrent by file-upload fallback: {Url}", torrentUrl);
+                return true;
+            }
+
+            _logger.LogWarning(
+                "File-upload fallback failed. Url={Url}, Status={Status}, Response={Response}",
+                torrentUrl,
+                response.StatusCode,
+                responseBody);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error in file-upload fallback for torrent: {Url}", torrentUrl);
+            return false;
+        }
+    }
+
+    private async Task<bool> WaitUntilTorrentVisibleAsync(string hash, int? baselineCount, string? category)
+    {
+        for (var attempt = 0; attempt < AddVerificationMaxAttempts; attempt++)
+        {
+            var torrents = await GetTorrentsAsync(category);
+            var hashMatched = !string.IsNullOrWhiteSpace(hash) &&
+                              torrents.Any(t => string.Equals(t.Hash, hash, StringComparison.OrdinalIgnoreCase));
+
+            if (hashMatched)
+            {
+                return true;
+            }
+
+            if (baselineCount.HasValue && torrents.Count > baselineCount.Value)
+            {
+                // Hash can differ for some torrent variants; count growth in target category indicates task was accepted.
+                return true;
+            }
+
+            if (attempt < AddVerificationMaxAttempts - 1)
+            {
+                await Task.Delay(AddVerificationDelay);
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsHttpTorrentUrl(string value)
+    {
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+               (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+    }
+
+    private static string TryResolveTorrentFilename(string torrentUrl)
+    {
+        if (Uri.TryCreate(torrentUrl, UriKind.Absolute, out var uri))
+        {
+            var filename = System.IO.Path.GetFileName(uri.LocalPath);
+            if (!string.IsNullOrWhiteSpace(filename))
+            {
+                return filename;
+            }
+        }
+
+        return "download.torrent";
+    }
+
+    private async Task<int?> TryGetTorrentCountAsync(string? category)
+    {
+        try
+        {
+            var torrents = await GetTorrentsAsync(category);
+            return torrents.Count;
+        }
+        catch (QBittorrentUnavailableException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private List<KeyValuePair<string, string>> BuildAddOptions(string? savePath, string? category, bool? paused)
+    {
+        var formData = new List<KeyValuePair<string, string>>();
+
+        var actualSavePath = savePath ?? _config.DefaultSavePath;
+        var actualCategory = category ?? _config.Category;
+        var actualTags = _config.Tags;
+        var actualPaused = paused ?? _config.PauseTorrentAfterAdd;
+
+        if (!string.IsNullOrEmpty(actualSavePath))
+        {
+            formData.Add(new KeyValuePair<string, string>("savepath", actualSavePath));
+        }
+
+        if (!string.IsNullOrEmpty(actualCategory))
+        {
+            formData.Add(new KeyValuePair<string, string>("category", actualCategory));
+        }
+
+        if (!string.IsNullOrWhiteSpace(actualTags))
+        {
+            formData.Add(new KeyValuePair<string, string>("tags", actualTags));
+        }
+
+        if (actualPaused)
+        {
+            formData.Add(new KeyValuePair<string, string>("paused", "true"));
+        }
+
+        return formData;
     }
 
     private HttpRequestMessage CreateRequest(HttpMethod method, string endpoint)
@@ -406,12 +745,47 @@ public class QBittorrentService : IQBittorrentService
         }
 
         var credentialKey = BuildCredentialKey();
-        if (FailedAttemptsByCredential.TryGetValue(credentialKey, out var failures) &&
-            failures >= MaxFailedAttemptsPerCredential)
+        if (!FailedAttemptsByCredential.TryGetValue(credentialKey, out var state))
         {
-            throw new InvalidOperationException(
-                $"qBittorrent login is blocked for current credentials after {failures} failed attempts.");
+            return;
         }
+
+        if (state.Failures < MaxFailedAttemptsPerCredential)
+        {
+            return;
+        }
+
+        if (state.BlockedUntilUtc <= DateTime.UtcNow)
+        {
+            FailedAttemptsByCredential.TryRemove(credentialKey, out _);
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"qBittorrent login is blocked for current credentials after {state.Failures} failed attempts. " +
+            $"Retry after {state.BlockedUntilUtc:O} UTC.");
+    }
+
+    private TimeSpan GetFailedLoginBlockDuration()
+    {
+        var seconds = _config.FailedLoginBlockSeconds;
+        if (seconds <= 0)
+        {
+            seconds = 300;
+        }
+
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    private TimeSpan GetEndpointSuspendDuration()
+    {
+        var seconds = _config.OfflineSuspendSeconds;
+        if (seconds <= 0)
+        {
+            seconds = Math.Max(30, _config.TimeoutSeconds);
+        }
+
+        return TimeSpan.FromSeconds(seconds);
     }
 
     private string BuildCredentialKey()
@@ -421,9 +795,111 @@ public class QBittorrentService : IQBittorrentService
         return Convert.ToHexString(hash);
     }
 
+    private string BuildEndpointKey()
+    {
+        return BaseUrl.Trim().ToLowerInvariant();
+    }
+
     private void RecordFailedAttempt(string credentialKey)
     {
-        FailedAttemptsByCredential.AddOrUpdate(credentialKey, 1, (_, current) => current + 1);
+        FailedAttemptsByCredential.AddOrUpdate(
+            credentialKey,
+            _ => new CredentialFailureState(1, DateTime.MinValue),
+            (_, current) =>
+            {
+                var failures = current.Failures + 1;
+                var blockedUntil = failures >= MaxFailedAttemptsPerCredential
+                    ? DateTime.UtcNow.Add(GetFailedLoginBlockDuration())
+                    : DateTime.MinValue;
+                return new CredentialFailureState(failures, blockedUntil);
+            });
+    }
+
+    private void ValidateAvailabilityPolicy()
+    {
+        var endpointKey = BuildEndpointKey();
+        if (!SuspendedEndpoints.TryGetValue(endpointKey, out var state))
+        {
+            return;
+        }
+
+        if (state.SuspendedUntilUtc <= DateTime.UtcNow)
+        {
+            SuspendedEndpoints.TryRemove(endpointKey, out _);
+            return;
+        }
+
+        throw CreateUnavailableException(state.Reason, state.SuspendedUntilUtc);
+    }
+
+    private QBittorrentUnavailableException MarkEndpointUnavailable(Exception ex)
+    {
+        var endpointKey = BuildEndpointKey();
+        var reason = BuildEndpointFailureReason(ex);
+        var blockedUntil = DateTime.UtcNow.Add(GetEndpointSuspendDuration());
+
+        var state = SuspendedEndpoints.AddOrUpdate(
+            endpointKey,
+            _ => new EndpointSuspendState(blockedUntil, reason),
+            (_, current) =>
+            {
+                if (current.SuspendedUntilUtc > blockedUntil)
+                {
+                    return current;
+                }
+
+                return new EndpointSuspendState(blockedUntil, reason);
+            });
+
+        return CreateUnavailableException(state.Reason, state.SuspendedUntilUtc, ex);
+    }
+
+    private QBittorrentUnavailableException CreateUnavailableException(
+        string reason,
+        DateTime retryAfterUtc,
+        Exception? innerException = null)
+    {
+        var message = $"qBittorrent is offline or unreachable. {reason} Retry after {retryAfterUtc:O} UTC.";
+        return new QBittorrentUnavailableException(message, reason, retryAfterUtc, innerException);
+    }
+
+    private string BuildEndpointFailureReason(Exception exception)
+    {
+        if (exception is TaskCanceledException)
+        {
+            return $"qBittorrent API request timed out after {_config.TimeoutSeconds} seconds.";
+        }
+
+        if (exception is HttpRequestException httpEx)
+        {
+            if (httpEx.InnerException is SocketException socketEx)
+            {
+                return $"Network error ({socketEx.SocketErrorCode}): {socketEx.Message}";
+            }
+
+            if (!string.IsNullOrWhiteSpace(httpEx.Message))
+            {
+                return httpEx.Message;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(exception.Message))
+        {
+            return exception.Message;
+        }
+
+        return "Unknown network error";
+    }
+
+    private static double NormalizeProgressPercent(double rawProgress)
+    {
+        if (double.IsNaN(rawProgress) || double.IsInfinity(rawProgress))
+        {
+            return 0;
+        }
+
+        var percent = rawProgress <= 1 ? rawProgress * 100 : rawProgress;
+        return Math.Round(Math.Clamp(percent, 0, 100), 2);
     }
 
     #endregion

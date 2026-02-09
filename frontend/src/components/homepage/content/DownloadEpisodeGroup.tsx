@@ -19,11 +19,14 @@ type ButtonState = "idle" | "downloading" | "paused" | "completed";
 
 function isCompleted(info: TorrentInfo | undefined): boolean {
   if (!info) return false;
+  if (isPaused(info)) return false;
   if (info.progress >= 99.9) return true;
   const normalized = info.state.toLowerCase();
   return (
     normalized.includes("completed") ||
-    normalized.includes("upload") ||
+    normalized.includes("uploading") ||
+    normalized.includes("forcedup") ||
+    normalized.includes("checkingup") ||
     normalized.includes("stalledup") ||
     normalized.includes("queuedup")
   );
@@ -46,6 +49,8 @@ function isPaused(info: TorrentInfo | undefined): boolean {
   const normalized = info.state.toLowerCase();
   return (
     normalized.includes("paused") ||
+    normalized.includes("stopped") ||
+    normalized.includes("stop") ||
     normalized.includes("stalldl") ||
     normalized.includes("queueddl") ||
     normalized.includes("pending")
@@ -56,14 +61,14 @@ function resolveButtonState(info: TorrentInfo | undefined, hasRecord: boolean): 
   if (!hasRecord) {
     return "idle";
   }
+  if (isPaused(info)) {
+    return "paused";
+  }
   if (isCompleted(info)) {
     return "completed";
   }
   if (isDownloading(info)) {
     return "downloading";
-  }
-  if (isPaused(info)) {
-    return "paused";
   }
   if (info && info.progress > 0) {
     return "paused";
@@ -88,20 +93,37 @@ function formatFileSize(fileSize?: number, formattedSize?: string): string | nul
   return `${(fileSize / gb).toFixed(2)} GB`;
 }
 
+function toResolutionTag(resolution: string | null): string | null {
+  if (!resolution) return null;
+  const raw = resolution.trim();
+  if (!raw) return null;
+
+  const lower = raw.toLowerCase();
+  if (lower === "4k") {
+    return "4K";
+  }
+
+  if (lower.endsWith("p")) {
+    return `${lower.slice(0, -1)}P`;
+  }
+
+  return raw.toUpperCase();
+}
+
 function detectSubtitleDisplay(item: ParsedRssItem): string | null {
   const rawSubtitle = item.subtitleType?.trim() ?? "";
-  const source = `${rawSubtitle} ${item.title}`;
+  if (rawSubtitle.length > 0) {
+    return rawSubtitle;
+  }
+
+  const source = item.title;
 
   if (/(?:\u5185\u5d4c|\u5167\u5d4c|\u5185\u5c01|\u5167\u5c01|\u5185\u6302|\u5167\u639b|internal|softsub)/i.test(source)) {
-    return "\u5b57\u5e55 \u5185\u5d4c";
+    return "\u5185\u5d4c";
   }
 
   if (/(?:\u5916\u6302|\u5916\u639b|\u5916\u7f6e|\u5916\u5c01|external|hard.?sub)/i.test(source)) {
-    return "\u5b57\u5e55 \u5916\u7f6e";
-  }
-
-  if (rawSubtitle.length > 0) {
-    return `\u5b57\u5e55 ${rawSubtitle}`;
+    return "\u5916\u7f6e";
   }
 
   return null;
@@ -143,8 +165,9 @@ function formatUpdatedAgo(value: string): string | null {
 function toDisplayTags(item: ParsedRssItem): { tags: string[]; weakTag: string | null } {
   const tags: string[] = [];
 
-  if (item.resolution) {
-    tags.push(`\u5206\u8fa8\u7387 ${item.resolution}`);
+  const resolutionTag = toResolutionTag(item.resolution);
+  if (resolutionTag) {
+    tags.push(resolutionTag);
   }
 
   const subtitleTag = detectSubtitleDisplay(item);
@@ -154,7 +177,7 @@ function toDisplayTags(item: ParsedRssItem): { tags: string[]; weakTag: string |
 
   const sizeTag = formatFileSize(item.fileSize, item.formattedSize);
   if (sizeTag) {
-    tags.push(`\u5927\u5c0f ${sizeTag}`);
+    tags.push(sizeTag);
   }
 
   return {

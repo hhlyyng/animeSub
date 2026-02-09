@@ -265,7 +265,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       setDownloadStatus(status);
 
       stopPollingRef.current?.();
-      stopPollingRef.current = mikanApi.startProgressPolling(5000, (progresses: Map<string, TorrentInfo>) => {
+      stopPollingRef.current = mikanApi.startProgressPolling(3000, (progresses: Map<string, TorrentInfo>) => {
         setTorrentInfo(progresses);
       });
     } catch (err) {
@@ -414,7 +414,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
           return next;
         });
 
-        toast.success(language === "zh" ? "\u4e0b\u8f7d\u6210\u529f" : "Downloaded successfully");
+        toast.success(language === "zh" ? "\u4efb\u52a1\u63a8\u9001\u6210\u529f" : "Task queued successfully");
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : "Failed to download";
         toast.error(language === "zh" ? `\u4e0b\u8f7d\u5931\u8d25: ${errorMsg}` : `Download failed: ${errorMsg}`);

@@ -1,11 +1,13 @@
-using System.Xml.Linq;
+using System.Globalization;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
+using HtmlAgilityPack;
 using Microsoft.Extensions.Options;
 using backend.Models.Configuration;
-using backend.Models.Mikan;
 using backend.Models.Dtos;
+using backend.Models.Mikan;
 using backend.Services.Interfaces;
-using HtmlAgilityPack;
+using backend.Services.Utils;
 
 namespace backend.Services.Implementations;
 
@@ -20,9 +22,14 @@ public partial class MikanClient : IMikanClient
     private readonly MikanConfiguration _config;
     private readonly ITorrentTitleParser _titleParser;
 
-    // Regex to extract info hash from magnet link or torrent URL
-    [GeneratedRegex(@"[a-fA-F0-9]{40}", RegexOptions.Compiled)]
-    private static partial Regex HashRegex();
+    [GeneratedRegex(@"\b(20\d{2})\b", RegexOptions.Compiled)]
+    private static partial Regex YearRegex();
+
+    [GeneratedRegex(@"(?:season\s*(\d+)|\bs\s*0?(\d+)\b|(\d+)(?:st|nd|rd|th)\s*season|\u7b2c\s*([0-9\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]+)\s*\u5b63)", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    private static partial Regex SeasonNumberRegex();
+
+    [GeneratedRegex(@"^(?:\d{1,4}|(?:2160|1080|720)p|4k|x26[45]|hevc|aac|flac|av1|mkv|mp4|chs|cht|gb|big5)$", RegexOptions.Compiled | RegexOptions.IgnoreCase)]
+    private static partial Regex NonSubgroupTokenRegex();
 
     public MikanClient(
         HttpClient httpClient,
@@ -35,10 +42,12 @@ public partial class MikanClient : IMikanClient
         _config = config.Value;
         _titleParser = titleParser;
 
-        // Set base address and timeout
         var baseUrl = _config.BaseUrl;
         if (!baseUrl.EndsWith('/'))
-            baseUrl += '/';
+        {
+            baseUrl += "/";
+        }
+
         _httpClient.BaseAddress = new Uri(baseUrl);
         _httpClient.Timeout = TimeSpan.FromSeconds(_config.TimeoutSeconds);
     }
@@ -50,13 +59,13 @@ public partial class MikanClient : IMikanClient
         {
             url += $"&subgroupid={subgroupId}";
         }
+
         return url;
     }
 
     public async Task<MikanRssFeed> GetAnimeFeedAsync(string mikanBangumiId, string? subgroupId = null)
     {
         var url = BuildRssUrl(mikanBangumiId, subgroupId);
-
         _logger.LogDebug("Fetching Mikan RSS: {Url}", url);
 
         try
@@ -122,7 +131,6 @@ public partial class MikanClient : IMikanClient
             Link = item.Element("link")?.Value
         };
 
-        // Parse enclosure for torrent URL and size
         var enclosure = item.Element("enclosure");
         if (enclosure != null)
         {
@@ -133,59 +141,57 @@ public partial class MikanClient : IMikanClient
             }
         }
 
-        // Try to extract hash from torrent URL or guid
-        var torrentHash = ExtractTorrentHash(rssItem.TorrentUrl);
-        if (string.IsNullOrEmpty(torrentHash))
+        var pubDateStr = ExtractPublishedAtRaw(item);
+        if (!string.IsNullOrWhiteSpace(pubDateStr) &&
+            DateTimeOffset.TryParse(pubDateStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var pubDate))
         {
-            var guid = item.Element("guid")?.Value;
-            if (!string.IsNullOrEmpty(guid))
-            {
-                torrentHash = ExtractTorrentHash(guid);
-            }
-        }
-        rssItem.TorrentHash = torrentHash ?? string.Empty;
-
-        // Parse publish date
-        var pubDateStr = item.Element("pubDate")?.Value;
-        if (!string.IsNullOrEmpty(pubDateStr) && DateTime.TryParse(pubDateStr, out var pubDate))
-        {
-            rssItem.PublishedAt = pubDate.ToUniversalTime();
+            rssItem.PublishedAt = pubDate.UtcDateTime;
         }
         else
         {
             rssItem.PublishedAt = DateTime.UtcNow;
         }
 
-        // Check for Mikan-specific elements (torrent namespace)
-        // Some Mikan feeds include torrent:magnetURI
         var torrentNs = XNamespace.Get("https://mikanani.me/0.1/");
         var magnetUri = item.Element(torrentNs + "magnetURI")?.Value;
         if (!string.IsNullOrEmpty(magnetUri))
         {
             rssItem.MagnetLink = magnetUri;
-            // Try to extract hash from magnet link if we don't have one yet
-            if (string.IsNullOrEmpty(rssItem.TorrentHash))
-            {
-                rssItem.TorrentHash = ExtractTorrentHash(magnetUri) ?? string.Empty;
-            }
+        }
+
+        var guid = item.Element("guid")?.Value;
+        rssItem.TorrentHash = TorrentHashHelper.ResolveHash(
+            rssItem.MagnetLink,
+            rssItem.TorrentUrl,
+            guid) ?? string.Empty;
+
+        if (string.IsNullOrWhiteSpace(rssItem.TorrentHash))
+        {
+            _logger.LogWarning("Failed to extract torrent hash from RSS item: {Title}", rssItem.Title);
         }
 
         return rssItem;
     }
 
-    private static string? ExtractTorrentHash(string? url)
+    private static string? ExtractPublishedAtRaw(XElement item)
     {
-        if (string.IsNullOrEmpty(url))
-            return null;
+        var directPubDate = item.Element("pubDate")?.Value;
+        if (!string.IsNullOrWhiteSpace(directPubDate))
+        {
+            return directPubDate;
+        }
 
-        var match = HashRegex().Match(url);
-        return match.Success ? match.Value.ToUpperInvariant() : null;
+        var torrentPubDate = item
+            .Descendants()
+            .FirstOrDefault(element => element.Name.LocalName.Equals("pubDate", StringComparison.OrdinalIgnoreCase))
+            ?.Value;
+
+        return string.IsNullOrWhiteSpace(torrentPubDate) ? null : torrentPubDate;
     }
 
     public async Task<MikanSearchResult?> SearchAnimeAsync(string title)
     {
         var searchUrl = $"Home/Search?searchstr={Uri.EscapeDataString(title)}";
-
         _logger.LogInformation("Searching Mikan HTML for: {Title}, URL: {SearchUrl}", title, searchUrl);
 
         try
@@ -198,11 +204,13 @@ public partial class MikanClient : IMikanClient
             _logger.LogInformation("Mikan search HTML content length: {Length} chars", htmlContent.Length);
 
             var result = ParseSearchHtml(htmlContent, title);
-
             if (result != null)
             {
-                _logger.LogInformation("Search result found: AnimeTitle={AnimeTitle}, SeasonsCount={SeasonsCount}, DefaultSeason={DefaultSeason}",
-                    result.AnimeTitle, result.Seasons.Count, result.DefaultSeason);
+                _logger.LogInformation(
+                    "Search result found: AnimeTitle={AnimeTitle}, SeasonsCount={SeasonsCount}, DefaultSeason={DefaultSeason}",
+                    result.AnimeTitle,
+                    result.Seasons.Count,
+                    result.DefaultSeason);
             }
             else
             {
@@ -231,9 +239,7 @@ public partial class MikanClient : IMikanClient
         doc.LoadHtml(htmlContent);
         _logger.LogInformation("HTML loaded successfully");
 
-        // Find all Bangumi links in search results
         var bangumiLinks = doc.DocumentNode.SelectNodes("//a[contains(@href, '/Home/Bangumi/')]");
-
         if (bangumiLinks == null || bangumiLinks.Count == 0)
         {
             _logger.LogWarning("No Bangumi links found in search results");
@@ -248,142 +254,244 @@ public partial class MikanClient : IMikanClient
         };
 
         var seenIds = new HashSet<string>();
-
         foreach (var bangumiLink in bangumiLinks)
         {
-            var href = bangumiLink.GetAttributeValue("href", "");
+            var href = bangumiLink.GetAttributeValue("href", string.Empty);
             var bangumiId = ExtractBangumiIdFromBangumiUrl(href);
-
-            if (!string.IsNullOrEmpty(bangumiId) && !seenIds.Contains(bangumiId))
+            if (string.IsNullOrEmpty(bangumiId) || !seenIds.Add(bangumiId))
             {
-                seenIds.Add(bangumiId);
+                continue;
+            }
 
-                string seasonName = "Season 1";
-                int year = 0;
+            var liElement = bangumiLink.Ancestors("li").FirstOrDefault();
+            var titleSpan = liElement?.SelectSingleNode(".//span[contains(@class, 'an-title')]");
 
-                // Try to detect season and year from link's parent elements
-                var liElement = bangumiLink.Ancestors("li").FirstOrDefault();
-                if (liElement != null)
+            var candidateTexts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(titleSpan?.InnerText))
+            {
+                candidateTexts.Add(HtmlEntity.DeEntitize(titleSpan.InnerText));
+            }
+            if (!string.IsNullOrWhiteSpace(bangumiLink.InnerText))
+            {
+                candidateTexts.Add(HtmlEntity.DeEntitize(bangumiLink.InnerText));
+            }
+            if (!string.IsNullOrWhiteSpace(liElement?.InnerText))
+            {
+                candidateTexts.Add(HtmlEntity.DeEntitize(liElement.InnerText));
+            }
+
+            var seasonNumber = 1;
+            var year = 0;
+            foreach (var text in candidateTexts)
+            {
+                var parsedSeason = TryExtractSeasonNumber(text);
+                if (parsedSeason.HasValue && parsedSeason.Value > 0)
                 {
-                    // Check for title text in the same list item
-                    var titleSpan = liElement.SelectSingleNode(".//span[contains(@class, 'an-title')]");
-                    if (titleSpan != null)
-                    {
-                        var titleText = titleSpan.InnerText;
-
-                        if (titleText.ToLowerInvariant().Contains("season 2") ||
-                            titleText.ToLowerInvariant().Contains("s2") ||
-                            titleText.ToLowerInvariant().Contains("第二季") ||
-                            titleText.ToLowerInvariant().Contains("2nd season"))
-                        {
-                            seasonName = "Season 2";
-                        }
-
-                        var yearMatch = Regex.Match(titleText, @"\b(20\d{2})\b");
-                        if (yearMatch.Success && int.TryParse(yearMatch.Groups[1].Value, out var yearNum))
-                        {
-                            year = yearNum;
-                        }
-                    }
+                    seasonNumber = parsedSeason.Value;
+                    break;
                 }
+            }
 
-                searchResult.Seasons.Add(new MikanSeasonInfo
+            foreach (var text in candidateTexts)
+            {
+                var parsedYear = TryExtractYear(text);
+                if (parsedYear.HasValue)
                 {
-                    SeasonName = seasonName,
-                    MikanBangumiId = bangumiId,
-                    Year = year
-                });
+                    year = parsedYear.Value;
+                    break;
+                }
+            }
+
+            searchResult.Seasons.Add(new MikanSeasonInfo
+            {
+                SeasonName = $"Season {seasonNumber}",
+                MikanBangumiId = bangumiId,
+                Year = year,
+                SeasonNumber = seasonNumber
+            });
+        }
+
+        if (searchResult.Seasons.Count == 0)
+        {
+            _logger.LogWarning("No valid seasons found");
+            return null;
+        }
+
+        searchResult.Seasons = searchResult.Seasons
+            .OrderBy(s => s.SeasonNumber ?? int.MaxValue)
+            .ThenBy(s => s.Year <= 0 ? int.MaxValue : s.Year)
+            .ToList();
+
+        searchResult.DefaultSeason = Math.Max(0, searchResult.Seasons.Count - 1);
+        _logger.LogInformation("Found {Count} seasons via Bangumi links", searchResult.Seasons.Count);
+        return searchResult;
+    }
+
+    private static int? TryExtractYear(string text)
+    {
+        var match = YearRegex().Match(text);
+        if (!match.Success || !int.TryParse(match.Groups[1].Value, out var year))
+        {
+            return null;
+        }
+
+        return year;
+    }
+
+    private static int? TryExtractSeasonNumber(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        var match = SeasonNumberRegex().Match(text);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        for (var i = 1; i < match.Groups.Count; i++)
+        {
+            var value = match.Groups[i].Value;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            if (int.TryParse(value, out var numeric) && numeric > 0)
+            {
+                return numeric;
+            }
+
+            var chinese = ParseChineseNumber(value);
+            if (chinese > 0)
+            {
+                return chinese;
             }
         }
 
-        if (searchResult.Seasons.Count > 0)
+        return null;
+    }
+
+    private static int ParseChineseNumber(string value)
+    {
+        return value switch
         {
-            searchResult.DefaultSeason = 0;
-            _logger.LogInformation("Found {Count} seasons via Bangumi links", searchResult.Seasons.Count);
-            return searchResult;
+            "\u4e00" => 1,
+            "\u4e8c" => 2,
+            "\u4e09" => 3,
+            "\u56db" => 4,
+            "\u4e94" => 5,
+            "\u516d" => 6,
+            "\u4e03" => 7,
+            "\u516b" => 8,
+            "\u4e5d" => 9,
+            "\u5341" => 10,
+            _ => 0
+        };
+    }
+
+    private static string? NormalizeSubgroup(string? subgroup)
+    {
+        if (string.IsNullOrWhiteSpace(subgroup))
+        {
+            return null;
         }
 
-        _logger.LogWarning("No valid seasons found");
-        return null;
+        var trimmed = subgroup.Trim();
+        if (trimmed.Length == 0 || trimmed.Length > 48)
+        {
+            return null;
+        }
+
+        return NonSubgroupTokenRegex().IsMatch(trimmed) ? null : trimmed;
     }
 
     private string? ExtractBangumiIdFromBangumiUrl(string url)
     {
         if (string.IsNullOrEmpty(url))
-            return null;
-
-        // Extract numeric bangumiId from URL like: /Home/Bangumi/229
-        var match = Regex.Match(url, @"/Home/Bangumi/(\d+)");
-        if (match.Success)
         {
-            return match.Groups[1].Value;
+            return null;
         }
 
-        return null;
+        var match = Regex.Match(url, @"/Home/Bangumi/(\d+)");
+        return match.Success ? match.Groups[1].Value : null;
     }
 
     private string? ExtractBangumiIdFromUrl(string url)
     {
         if (string.IsNullOrEmpty(url))
-            return null;
-
-        // Extract bangumiId from URL like: /RSS/Bangumi?bangumiId=xxx
-        var match = Regex.Match(url, @"bangumiId=([^&]+)");
-        if (match.Success)
         {
-            return match.Groups[1].Value;
+            return null;
         }
-        
-        return null;
+
+        var match = Regex.Match(url, @"bangumiId=([^&]+)");
+        return match.Success ? match.Groups[1].Value : null;
     }
 
     public async Task<MikanFeedResponse> GetParsedFeedAsync(string mikanBangumiId)
     {
         _logger.LogInformation("Getting parsed feed for Mikan ID: {MikanId}", mikanBangumiId);
-        
+
         var feed = await GetAnimeFeedAsync(mikanBangumiId);
         _logger.LogInformation("Retrieved RSS feed: Title={Title}, ItemsCount={Count}", feed.Title, feed.Items.Count);
-        
+
         var response = new MikanFeedResponse
         {
             SeasonName = feed.Title,
             Items = new List<ParsedRssItem>(),
             AvailableSubgroups = new List<string>(),
             AvailableResolutions = new List<string>(),
-            AvailableSubtitleTypes = new List<string>()
+            AvailableSubtitleTypes = new List<string>(),
+            EpisodeOffset = 0
         };
 
-        var subgroupsSet = new HashSet<string>();
-        var resolutionsSet = new HashSet<string>();
-        var subtitleTypesSet = new HashSet<string>();
+        var subgroupsSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var resolutionsSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var subtitleTypesSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var item in feed.Items.OrderByDescending(i => i.PublishedAt))
         {
             var parsed = _titleParser.ParseTitle(item.Title);
-            _logger.LogDebug("Parsed item: Title={Title}, Resolution={Res}, Subgroup={Sub}, Episode={Ep}", 
-                item.Title, parsed.Resolution, parsed.Subgroup, parsed.Episode);
-            
+            var subgroup = NormalizeSubgroup(parsed.Subgroup);
+            var normalizedHash = TorrentHashHelper.ResolveHash(
+                item.TorrentHash,
+                item.MagnetLink,
+                item.TorrentUrl);
+            var canDownload =
+                !string.IsNullOrWhiteSpace(normalizedHash) &&
+                (!string.IsNullOrWhiteSpace(item.MagnetLink) || !string.IsNullOrWhiteSpace(item.TorrentUrl));
+
+            _logger.LogDebug(
+                "Parsed item: Title={Title}, Resolution={Res}, Subgroup={Sub}, Episode={Ep}",
+                item.Title,
+                parsed.Resolution,
+                subgroup,
+                parsed.Episode);
+
             var parsedItem = new ParsedRssItem
             {
                 Title = item.Title,
                 TorrentUrl = item.TorrentUrl,
                 MagnetLink = item.MagnetLink ?? string.Empty,
-                TorrentHash = item.TorrentHash,
+                TorrentHash = normalizedHash ?? string.Empty,
+                CanDownload = canDownload,
                 FileSize = item.FileSize ?? 0,
                 FormattedSize = FormatFileSize(item.FileSize ?? 0),
                 PublishedAt = item.PublishedAt,
                 Resolution = parsed.Resolution,
-                Subgroup = parsed.Subgroup,
+                Subgroup = subgroup,
                 SubtitleType = parsed.SubtitleType,
-                Episode = parsed.Episode
+                Episode = parsed.Episode,
+                IsCollection = parsed.IsCollection
             };
 
             response.Items.Add(parsedItem);
 
-            // Collect available filter options
-            if (!string.IsNullOrEmpty(parsed.Subgroup))
+            if (!string.IsNullOrEmpty(subgroup))
             {
-                subgroupsSet.Add(parsed.Subgroup);
+                subgroupsSet.Add(subgroup);
             }
             if (!string.IsNullOrEmpty(parsed.Resolution))
             {
@@ -395,12 +503,33 @@ public partial class MikanClient : IMikanClient
             }
         }
 
-        response.AvailableSubgroups = subgroupsSet.ToList();
-        response.AvailableResolutions = resolutionsSet.ToList();
-        response.AvailableSubtitleTypes = subtitleTypesSet.ToList();
+        response.AvailableSubgroups = subgroupsSet.OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
+        response.AvailableResolutions = resolutionsSet.OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
+        response.AvailableSubtitleTypes = subtitleTypesSet.OrderBy(s => s, StringComparer.OrdinalIgnoreCase).ToList();
 
-        _logger.LogInformation("Parsed feed '{Title}' with {Count} items, {Subgroups} subgroups, {Resolutions} resolutions, {SubtitleTypes} subtitle types",
-            feed.Title, response.Items.Count, response.AvailableSubgroups.Count, response.AvailableResolutions.Count, response.AvailableSubtitleTypes.Count);
+        var latestItem = response.Items.OrderByDescending(i => i.PublishedAt).FirstOrDefault();
+        if (latestItem != null)
+        {
+            response.LatestPublishedAt = latestItem.PublishedAt;
+            response.LatestTitle = latestItem.Title;
+        }
+
+        var episodeCandidates = response.Items
+            .Where(i => i.Episode.HasValue)
+            .Select(i => i.Episode!.Value)
+            .ToList();
+        if (episodeCandidates.Count > 0)
+        {
+            response.LatestEpisode = episodeCandidates.Max();
+        }
+
+        _logger.LogInformation(
+            "Parsed feed '{Title}' with {Count} items, {Subgroups} subgroups, {Resolutions} resolutions, {SubtitleTypes} subtitle types",
+            feed.Title,
+            response.Items.Count,
+            response.AvailableSubgroups.Count,
+            response.AvailableResolutions.Count,
+            response.AvailableSubtitleTypes.Count);
 
         return response;
     }
@@ -412,12 +541,18 @@ public partial class MikanClient : IMikanClient
         const long GB = MB * 1024;
 
         if (bytes < KB)
+        {
             return bytes + " B";
+        }
         if (bytes < MB)
+        {
             return ((double)bytes / KB).ToString("F1") + " KB";
+        }
         if (bytes < GB)
+        {
             return ((double)bytes / MB).ToString("F1") + " MB";
-        
+        }
+
         return ((double)bytes / GB).ToString("F2") + " GB";
     }
 }

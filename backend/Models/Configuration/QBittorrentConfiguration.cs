@@ -39,6 +39,12 @@ public class QBittorrentConfiguration
     public string Category { get; set; } = "anime";
 
     /// <summary>
+    /// Comma-separated tags to assign to torrents added by AnimeSub (default: AnimeSub)
+    /// qBittorrent Web API field name: "tags"
+    /// </summary>
+    public string Tags { get; set; } = "AnimeSub";
+
+    /// <summary>
     /// Whether to pause torrents after adding (default: false)
     /// </summary>
     public bool PauseTorrentAfterAdd { get; set; } = false;
@@ -47,6 +53,16 @@ public class QBittorrentConfiguration
     /// HTTP request timeout in seconds (default: 30)
     /// </summary>
     public int TimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// Lockout window in seconds after reaching failed login threshold (default: 300)
+    /// </summary>
+    public int FailedLoginBlockSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Suspension window in seconds after qBittorrent becomes unreachable/timeout (default: 45)
+    /// </summary>
+    public int OfflineSuspendSeconds { get; set; } = 45;
 
     /// <summary>
     /// Constructs the base URL for qBittorrent WebUI API

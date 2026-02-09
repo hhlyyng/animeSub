@@ -105,6 +105,7 @@ public class QBTorrentInfo
     public int NumLeechs { get; set; }
     public string? Category { get; set; }
     public string? SavePath { get; set; }
+    public int? Eta { get; set; }
     public long AddedOn { get; set; }
     public long CompletionOn { get; set; }
 }

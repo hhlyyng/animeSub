@@ -8,10 +8,30 @@ import type {
 
 const API_BASE = "http://localhost:5072/api";
 
-export async function searchMikanAnime(title: string, bangumiId?: string): Promise<MikanSearchResult> {
+async function resolveApiErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await response.json();
+    if (typeof payload?.message === "string" && payload.message.trim().length > 0) {
+      return payload.message.trim();
+    }
+  } catch {
+    // Ignore non-JSON response and keep fallback.
+  }
+
+  return fallback;
+}
+
+export async function searchMikanAnime(
+  title: string,
+  bangumiId?: string,
+  season?: number
+): Promise<MikanSearchResult> {
   const params = new URLSearchParams({ title });
   if (bangumiId) {
     params.append("bangumiId", bangumiId);
+  }
+  if (typeof season === "number" && season > 0) {
+    params.append("season", season.toString());
   }
 
   const response = await fetch(`${API_BASE}/mikan/search?${params.toString()}`);
@@ -21,8 +41,13 @@ export async function searchMikanAnime(title: string, bangumiId?: string): Promi
   return response.json();
 }
 
-export async function getMikanFeed(mikanId: string): Promise<MikanFeedResponse> {
-  const response = await fetch(`${API_BASE}/mikan/feed?mikanId=${encodeURIComponent(mikanId)}`);
+export async function getMikanFeed(mikanId: string, bangumiId?: string): Promise<MikanFeedResponse> {
+  const params = new URLSearchParams({ mikanId });
+  if (bangumiId) {
+    params.append("bangumiId", bangumiId);
+  }
+
+  const response = await fetch(`${API_BASE}/mikan/feed?${params.toString()}`);
   if (!response.ok) {
     throw new Error(`Failed to fetch feed: ${response.statusText}`);
   }
@@ -47,7 +72,7 @@ export async function filterMikanFeed(
   return response.json();
 }
 
-export async function downloadTorrent(request: DownloadTorrentRequest): Promise<void> {
+export async function downloadTorrent(request: DownloadTorrentRequest): Promise<string> {
   const response = await fetch(`${API_BASE}/mikan/download`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -66,20 +91,83 @@ export async function downloadTorrent(request: DownloadTorrentRequest): Promise<
     }
     throw new Error(message);
   }
+
+  try {
+    const payload = await response.json();
+    if (typeof payload?.hash === "string" && payload.hash.trim().length > 0) {
+      return payload.hash.trim();
+    }
+  } catch {
+    // Keep fallback to request hash.
+  }
+
+  return request.torrentHash?.trim() ?? "";
 }
 
 export async function getTorrents(): Promise<TorrentInfo[]> {
   const response = await fetch(`${API_BASE}/mikan/torrents`);
   if (!response.ok) {
-    throw new Error(`Failed to get torrents: ${response.statusText}`);
+    throw new Error(await resolveApiErrorMessage(response, `Failed to get torrents: ${response.statusText}`));
   }
   return response.json();
 }
 
+export async function pauseTorrent(hash: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/mikan/torrents/${encodeURIComponent(hash)}/pause`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await resolveApiErrorMessage(response, `Failed to pause torrent: ${response.statusText}`));
+  }
+}
+
+export async function resumeTorrent(hash: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/mikan/torrents/${encodeURIComponent(hash)}/resume`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await resolveApiErrorMessage(response, `Failed to resume torrent: ${response.statusText}`));
+  }
+}
+
+export async function removeTorrent(hash: string, deleteFiles = false): Promise<void> {
+  const params = new URLSearchParams({ deleteFiles: String(deleteFiles) });
+  const response = await fetch(
+    `${API_BASE}/mikan/torrents/${encodeURIComponent(hash)}?${params.toString()}`,
+    {
+      method: "DELETE",
+    }
+  );
+  if (!response.ok) {
+    throw new Error(await resolveApiErrorMessage(response, `Failed to remove torrent: ${response.statusText}`));
+  }
+}
+
 export async function checkDownloadStatus(items: ParsedRssItem[]): Promise<Map<string, boolean>> {
-  const torrents = await getTorrents();
-  const existingHashes = new Set(torrents.map((torrent) => torrent.hash));
-  return new Map(items.map((item) => [item.torrentHash, existingHashes.has(item.torrentHash)]));
+  let torrents: TorrentInfo[] = [];
+  try {
+    torrents = await getTorrents();
+  } catch (error) {
+    console.warn("Failed to query qBittorrent status, falling back to local default:", error);
+  }
+  const existingHashes = new Set(
+    torrents
+      .map((torrent) => torrent.hash.trim().toUpperCase())
+      .filter((hash) => hash.length > 0)
+  );
+
+  const statusEntries = items
+    .map((item) => {
+      const hash = item.torrentHash?.trim().toUpperCase();
+      if (!hash) {
+        return null;
+      }
+
+      return [hash, existingHashes.has(hash)] as const;
+    })
+    .filter((entry): entry is readonly [string, boolean] => entry !== null);
+
+  return new Map(statusEntries);
 }
 
 export function startProgressPolling(
@@ -94,7 +182,18 @@ export function startProgressPolling(
       if (!isPolling) return;
 
       if (onProgress) {
-        onProgress(new Map(torrents.map((torrent) => [torrent.hash, torrent])));
+        const entries = torrents
+          .map((torrent) => {
+            const hash = torrent.hash?.trim().toUpperCase();
+            if (!hash) {
+              return null;
+            }
+
+            return [hash, { ...torrent, hash }] as const;
+          })
+          .filter((entry): entry is readonly [string, TorrentInfo] => entry !== null);
+
+        onProgress(new Map(entries));
       }
     } catch (error) {
       console.error("Failed to poll torrent progress:", error);

@@ -108,7 +108,7 @@ builder.Services.AddScoped<IAniListClient>(sp =>
     return new backend.Services.Implementations.AniListClient(factory.CreateClient("anilist-client"), logger, config);
 });
 
-builder.Services.AddScoped<IQBittorrentService>(sp =>
+builder.Services.AddSingleton<IQBittorrentService>(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.QBittorrentService>>();

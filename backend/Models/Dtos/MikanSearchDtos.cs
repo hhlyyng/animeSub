@@ -40,6 +40,11 @@ public class MikanSeasonInfo
     /// Year the season aired
     /// </summary>
     public int Year { get; set; }
+
+    /// <summary>
+    /// Parsed season number (1, 2, 3...) when available
+    /// </summary>
+    public int? SeasonNumber { get; set; }
 }
 
 /// <summary>
@@ -71,6 +76,26 @@ public class MikanFeedResponse
     /// List of available subtitle types in the feed
     /// </summary>
     public List<string> AvailableSubtitleTypes { get; set; } = new();
+
+    /// <summary>
+    /// Latest episode number after normalization, if detected
+    /// </summary>
+    public int? LatestEpisode { get; set; }
+
+    /// <summary>
+    /// The latest publish time among feed items
+    /// </summary>
+    public DateTime? LatestPublishedAt { get; set; }
+
+    /// <summary>
+    /// Title of the latest feed item
+    /// </summary>
+    public string? LatestTitle { get; set; }
+
+    /// <summary>
+    /// Episode offset applied for renumbering (e.g., 24 means 25->1)
+    /// </summary>
+    public int EpisodeOffset { get; set; }
 }
 
 /// <summary>
@@ -97,6 +122,11 @@ public class ParsedTorrentInfo
     /// Episode number
     /// </summary>
     public int? Episode { get; set; }
+
+    /// <summary>
+    /// Whether this title represents a collection/batch package
+    /// </summary>
+    public bool IsCollection { get; set; }
 }
 
 /// <summary>
@@ -123,6 +153,11 @@ public class ParsedRssItem
     /// Torrent info hash
     /// </summary>
     public string TorrentHash { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether this item has enough normalized metadata to submit a download task
+    /// </summary>
+    public bool CanDownload { get; set; }
 
     /// <summary>
     /// File size in bytes
@@ -158,6 +193,11 @@ public class ParsedRssItem
     /// Episode number
     /// </summary>
     public int? Episode { get; set; }
+
+    /// <summary>
+    /// Whether this item is a collection/batch package
+    /// </summary>
+    public bool IsCollection { get; set; }
 }
 
 /// <summary>
