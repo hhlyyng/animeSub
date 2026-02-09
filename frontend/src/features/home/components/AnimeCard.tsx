@@ -9,14 +9,22 @@ type AnimeCardProps = {
   isHoverLocked?: boolean;
 };
 
+function normalizeTitleForDisplay(title: string): string {
+  return title
+    .replace(/\u301C/g, "～")
+    .replace(/●+/g, (value) => "某".repeat(value.length))
+    .trim();
+}
+
 export function AnimeCard({ anime, onSelect, onHoverChange, isHoverLocked }: AnimeCardProps) {
   const [isHovered, setIsHovered] = useState(false);
   const language = useAppStore((state) => state.language);
 
   // Choose title based on language, fallback to jp_title if both ch/en are empty
-  const displayTitle = language === 'zh'
+  const rawDisplayTitle = language === 'zh'
     ? (anime.ch_title || anime.en_title || anime.jp_title)
     : (anime.en_title || anime.ch_title || anime.jp_title);
+  const displayTitle = normalizeTitleForDisplay(rawDisplayTitle);
 
   const hasLandscape = !!anime.images?.landscape;
 

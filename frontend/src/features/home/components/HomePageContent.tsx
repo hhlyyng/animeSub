@@ -5,13 +5,39 @@ import { useAppStore } from "../../../stores/useAppStores";
 import { API_BASE_URL } from "../../../config/env";
 
 const CACHE_KEYS = {
-    todayAnimes: 'v2:todayAnimes',
-    bangumiTop10: 'v2:bangumiTop10',
-    anilistTop10: 'v2:anilistTop10',
-    malTop10: 'v2:malTop10'
+    todayAnimes: 'v3:todayAnimes',
+    bangumiTop10: 'v3:bangumiTop10',
+    anilistTop10: 'v3:anilistTop10',
+    malTop10: 'v3:malTop10'
 };
 
 const API_BASE = `${API_BASE_URL}/anime`;
+
+const resolveAnimeIdentity = (anime: AnimeInfo): string => {
+    return (
+        anime.external_urls?.mal?.trim() ||
+        anime.external_urls?.anilist?.trim() ||
+        anime.external_urls?.bangumi?.trim() ||
+        `${anime.bangumi_id?.trim() ?? ''}|${anime.jp_title?.trim() ?? ''}|${anime.en_title?.trim() ?? ''}|${anime.ch_title?.trim() ?? ''}`
+    );
+};
+
+const dedupeAnimeList = (animes: AnimeInfo[]): AnimeInfo[] => {
+    const seen = new Set<string>();
+    return animes.filter((anime) => {
+        const identity = resolveAnimeIdentity(anime);
+        if (!identity) {
+            return true;
+        }
+
+        if (seen.has(identity)) {
+            return false;
+        }
+
+        seen.add(identity);
+        return true;
+    });
+};
 
 // Preload images in background for smoother UX
 const preloadImages = (animes: AnimeInfo[]) => {
@@ -58,7 +84,13 @@ const HomeContent = () => {
         const cached = sessionStorage.getItem(cacheKey);
         if (cached) {
             try {
-                return JSON.parse(cached);
+                const cachedItems = JSON.parse(cached) as AnimeInfo[];
+                const dedupedCachedItems = dedupeAnimeList(cachedItems);
+                if (dedupedCachedItems.length !== cachedItems.length) {
+                    sessionStorage.setItem(cacheKey, JSON.stringify(dedupedCachedItems));
+                }
+
+                return dedupedCachedItems;
             } catch (e) {
                 console.error(`Failed to parse cached data for ${cacheKey}:`, e);
                 sessionStorage.removeItem(cacheKey);
@@ -81,8 +113,9 @@ const HomeContent = () => {
         }
 
         // 保存到缓存
-        sessionStorage.setItem(cacheKey, JSON.stringify(result.data.animes));
-        return result.data.animes;
+        const dedupedItems = dedupeAnimeList(result.data.animes ?? []);
+        sessionStorage.setItem(cacheKey, JSON.stringify(dedupedItems));
+        return dedupedItems;
     };
 
     useEffect(() => {

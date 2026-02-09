@@ -101,6 +101,15 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
 
   const visible = items.slice(startIndex, startIndex + windowSize);
 
+  const resolveCardKey = (anime: AnimeInfo, index: number): string => {
+    return (
+      anime.external_urls?.mal?.trim() ||
+      anime.external_urls?.anilist?.trim() ||
+      anime.external_urls?.bangumi?.trim() ||
+      `${anime.bangumi_id || "unknown"}|${anime.jp_title || ""}|${anime.en_title || ""}|${anime.ch_title || ""}|${startIndex + index}`
+    );
+  };
+
   return (
   <>
     {/* 外层容器 - 控制整个AnimeFlow */}
@@ -146,9 +155,9 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
         {/* 卡片流容器 */}
         <div className="flex-1 min-w-0 overflow-visible">
           <div className="flex w-max gap-4 transition-transform duration-500 ease-in-out">
-            {visible.map(anime => (
+            {visible.map((anime, index) => (
               <div
-                key={anime.bangumi_id}
+                key={resolveCardKey(anime, index)}
                 className="flex-shrink-0"
                 style={{ minWidth: '200px' }}
               >

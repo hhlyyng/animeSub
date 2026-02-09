@@ -540,6 +540,181 @@ public class AnimeAggregationServiceTests
         _repositoryMock.Verify(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()), Times.Once);
     }
 
+    [Fact]
+    public async Task GetTopAnimeFromMALAsync_WhenBangumiUnresolved_UsesMalFallbackId()
+    {
+        // Arrange
+        _jikanClientMock
+            .Setup(j => j.GetTopAnimeAsync(10))
+            .ReturnsAsync(new List<backend.Models.Jikan.JikanAnimeInfo>
+            {
+                new()
+                {
+                    MalId = 11061,
+                    Title = "Hunter x Hunter",
+                    TitleJapanese = "HUNTER×HUNTER（ハンター×ハンター）",
+                    TitleEnglish = "Hunter x Hunter",
+                    Url = "https://myanimelist.net/anime/11061/Hunter_x_Hunter_2011",
+                    Score = 9.0,
+                    Synopsis = "synopsis",
+                    Images = new backend.Models.Jikan.JikanImages
+                    {
+                        Jpg = new backend.Models.Jikan.JikanImageFormat
+                        {
+                            LargeImageUrl = "https://example.com/hxh.jpg"
+                        }
+                    }
+                }
+            });
+
+        _repositoryMock
+            .Setup(r => r.FindAnimeInfoByAnyTitleAsync(It.IsAny<string?[]>()))
+            .ReturnsAsync((AnimeInfoEntity?)null);
+
+        _bangumiClientMock
+            .Setup(b => b.SearchByTitleAsync(It.IsAny<string>()))
+            .ReturnsAsync(JsonDocument.Parse("{}").RootElement);
+
+        _tmdbClientMock
+            .Setup(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync((TMDBAnimeInfo?)null);
+
+        _aniListClientMock
+            .Setup(a => a.GetAnimeInfoAsync(It.IsAny<string>()))
+            .ReturnsAsync((AniListAnimeInfo?)null);
+
+        // Act
+        var result = await _sut.GetTopAnimeFromMALAsync(limit: 10);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.Count.Should().Be(1);
+        result.Animes[0].BangumiId.Should().Be("mal:11061");
+    }
+
+    [Fact]
+    public async Task GetTopAnimeFromMALAsync_WhenCacheTitleMismatched_IgnoresCacheAndUsesBangumiLookup()
+    {
+        // Arrange
+        _jikanClientMock
+            .Setup(j => j.GetTopAnimeAsync(10))
+            .ReturnsAsync(new List<backend.Models.Jikan.JikanAnimeInfo>
+            {
+                new()
+                {
+                    MalId = 59978,
+                    Title = "Sousou no Frieren 2nd Season",
+                    TitleJapanese = "葬送のフリーレン 第2期",
+                    TitleEnglish = "Frieren: Beyond Journey's End Season 2",
+                    Url = "https://myanimelist.net/anime/59978/Sousou_no_Frieren_2nd_Season",
+                    Score = 9.2,
+                    Synopsis = "synopsis"
+                }
+            });
+
+        _repositoryMock
+            .Setup(r => r.FindAnimeInfoByAnyTitleAsync(It.IsAny<string?[]>()))
+            .ReturnsAsync(new AnimeInfoEntity
+            {
+                BangumiId = 459283,
+                NameJapanese = "葬送のフリーレン",
+                NameChinese = "葬送的芙莉莲 ～●●的魔法～",
+                NameEnglish = "Frieren: Beyond Journey's End"
+            });
+
+        _bangumiClientMock
+            .Setup(b => b.SearchByTitleAsync(It.IsAny<string>()))
+            .ReturnsAsync(JsonDocument.Parse(
+                """
+                {
+                  "id": 515759,
+                  "name_cn": "葬送的芙莉莲 第二季",
+                  "summary": "season2"
+                }
+                """).RootElement);
+
+        _repositoryMock
+            .Setup(r => r.GetAnimeInfoAsync(515759))
+            .ReturnsAsync((AnimeInfoEntity?)null);
+
+        _tmdbClientMock
+            .Setup(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync((TMDBAnimeInfo?)null);
+
+        _aniListClientMock
+            .Setup(a => a.GetAnimeInfoAsync(It.IsAny<string>()))
+            .ReturnsAsync((AniListAnimeInfo?)null);
+
+        _repositoryMock
+            .Setup(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _sut.GetTopAnimeFromMALAsync(limit: 10);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.Count.Should().Be(1);
+        result.Animes[0].BangumiId.Should().Be("515759");
+        result.Animes[0].ChTitle.Should().Be("葬送的芙莉莲 第二季");
+
+        _bangumiClientMock.Verify(b => b.SearchByTitleAsync(It.IsAny<string>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetTopAnimeFromMALAsync_WhenTitleMatchesKnownOverridePattern_NormalizesChineseTitle()
+    {
+        // Arrange
+        _jikanClientMock
+            .Setup(j => j.GetTopAnimeAsync(10))
+            .ReturnsAsync(new List<backend.Models.Jikan.JikanAnimeInfo>
+            {
+                new()
+                {
+                    MalId = 52991,
+                    Title = "Sousou no Frieren",
+                    TitleJapanese = "葬送のフリーレン",
+                    TitleEnglish = "Frieren: Beyond Journey's End",
+                    Url = "https://myanimelist.net/anime/52991/Sousou_no_Frieren",
+                    Score = 9.1,
+                    Synopsis = "synopsis",
+                    Images = new backend.Models.Jikan.JikanImages
+                    {
+                        Jpg = new backend.Models.Jikan.JikanImageFormat
+                        {
+                            LargeImageUrl = "https://example.com/mal-portrait.jpg"
+                        }
+                    }
+                }
+            });
+
+        _repositoryMock
+            .Setup(r => r.FindAnimeInfoByAnyTitleAsync(It.IsAny<string?[]>()))
+            .ReturnsAsync(new AnimeInfoEntity
+            {
+                BangumiId = 459283,
+                NameJapanese = "葬送のフリーレン",
+                NameChinese = "葬送的芙莉莲 ～●●的魔法～",
+                NameEnglish = "Frieren: Beyond Journey's End",
+                ImageLandscape = "https://example.com/cached-landscape.jpg",
+                UrlBangumi = "https://bgm.tv/subject/459283",
+                UrlTmdb = "https://www.themoviedb.org/tv/123",
+                UrlAnilist = "https://anilist.co/anime/123"
+            });
+
+        _repositoryMock
+            .Setup(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()))
+            .Returns(Task.CompletedTask);
+
+        // Act
+        var result = await _sut.GetTopAnimeFromMALAsync(limit: 10);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.Count.Should().Be(1);
+        result.Animes[0].ChTitle.Should().Be("葬送的芙莉莲");
+    }
+
     #endregion
 
     #region Helper Methods

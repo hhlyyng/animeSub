@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 using backend.Data.Entities;
 using backend.Models;
 using backend.Models.Dtos;
@@ -674,17 +675,36 @@ public class AnimeAggregationService : IAnimeAggregationService
         {
             var topAnime = await _jikanClient.GetTopAnimeAsync(limit);
             var animeDtos = new List<AnimeInfoDto>();
+            var seenMalUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var anime in topAnime)
             {
                 if (cancellationToken.IsCancellationRequested) break;
+
+                var malUrl = anime.Url?.Trim() ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(malUrl) && !seenMalUrls.Add(malUrl))
+                {
+                    _logger.LogDebug("Skipping duplicated MAL entry by URL: {MalUrl}", malUrl);
+                    continue;
+                }
 
                 var jpTitle = anime.TitleJapanese ?? "";
                 var enTitle = anime.TitleEnglish ?? anime.Title ?? "";
                 var enDesc = anime.Synopsis ?? "";
                 var portraitUrl = anime.Images?.Jpg?.LargeImageUrl ?? anime.Images?.Jpg?.ImageUrl ?? "";
 
-                var cachedByTitle = await _repository.FindAnimeInfoByAnyTitleAsync(jpTitle, enTitle, anime.Title);
+                var cachedByTitle = await _repository.FindAnimeInfoByAnyTitleAsync(jpTitle, anime.Title);
+                if (cachedByTitle != null &&
+                    !IsCacheEntryCompatibleWithMalAnime(cachedByTitle, jpTitle, anime.Title))
+                {
+                    _logger.LogDebug(
+                        "Ignoring MAL cache hit due to title mismatch. MAL JP='{MalJp}', MAL Title='{MalTitle}', Cached JP='{CachedJp}', Cached EN='{CachedEn}'",
+                        jpTitle,
+                        anime.Title,
+                        cachedByTitle.NameJapanese,
+                        cachedByTitle.NameEnglish);
+                    cachedByTitle = null;
+                }
 
                 var bangumiId = cachedByTitle?.BangumiId.ToString() ?? "";
                 var chTitle = cachedByTitle?.NameChinese ?? "";
@@ -706,6 +726,10 @@ public class AnimeAggregationService : IAnimeAggregationService
                     }
                 }
 
+                var clientFacingId = string.IsNullOrWhiteSpace(bangumiId)
+                    ? BuildMalFallbackId(anime)
+                    : bangumiId;
+
                 // PRIORITY: Try TMDB first for better quality backdrop
                 var landscapeUrl = cachedByBangumi?.ImageLandscape ?? "";
                 var anilistUrl = cachedByBangumi?.UrlAnilist ?? "";
@@ -723,6 +747,8 @@ public class AnimeAggregationService : IAnimeAggregationService
                 {
                     chDesc = cachedByBangumi?.DescChinese ?? "";
                 }
+
+                chTitle = ApplyKnownChineseTitleOverrides(chTitle);
 
                 if (string.IsNullOrWhiteSpace(landscapeUrl) || string.IsNullOrWhiteSpace(tmdbUrl))
                 {
@@ -753,7 +779,7 @@ public class AnimeAggregationService : IAnimeAggregationService
 
                 animeDtos.Add(new AnimeInfoDto
                 {
-                    BangumiId = bangumiId,
+                    BangumiId = clientFacingId,
                     JpTitle = jpTitle,
                     ChTitle = chTitle,
                     EnTitle = enTitle,
@@ -766,7 +792,7 @@ public class AnimeAggregationService : IAnimeAggregationService
                         Bangumi = bangumiUrl,
                         Tmdb = tmdbUrl,
                         Anilist = anilistUrl,
-                        Mal = anime.Url ?? ""
+                        Mal = malUrl
                     }
                 });
 
@@ -985,6 +1011,94 @@ public class AnimeAggregationService : IAnimeAggregationService
     private static string? NullIfWhiteSpace(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string BuildMalFallbackId(JikanAnimeInfo anime)
+    {
+        if (anime.MalId > 0)
+        {
+            return $"mal:{anime.MalId}";
+        }
+
+        var seed = NormalizeTitleForComparison(anime.TitleJapanese)
+            ?? NormalizeTitleForComparison(anime.TitleEnglish)
+            ?? NormalizeTitleForComparison(anime.Title)
+            ?? "unknown";
+
+        return $"mal:{seed}";
+    }
+
+    private static bool IsCacheEntryCompatibleWithMalAnime(
+        AnimeInfoEntity cacheEntry,
+        string? malJapaneseTitle,
+        string? malDefaultTitle)
+    {
+        var normalizedMalJp = NormalizeTitleForComparison(malJapaneseTitle);
+        var normalizedCachedJp = NormalizeTitleForComparison(cacheEntry.NameJapanese);
+
+        if (!string.IsNullOrWhiteSpace(normalizedMalJp) &&
+            !string.IsNullOrWhiteSpace(normalizedCachedJp))
+        {
+            return string.Equals(
+                normalizedMalJp,
+                normalizedCachedJp,
+                StringComparison.Ordinal);
+        }
+
+        var normalizedMalDefault = NormalizeTitleForComparison(malDefaultTitle);
+        if (string.IsNullOrWhiteSpace(normalizedMalDefault))
+        {
+            return true;
+        }
+
+        var candidates = new HashSet<string>(StringComparer.Ordinal)
+        {
+            NormalizeTitleForComparison(cacheEntry.NameJapanese) ?? string.Empty,
+            NormalizeTitleForComparison(cacheEntry.NameChinese) ?? string.Empty,
+            NormalizeTitleForComparison(cacheEntry.NameEnglish) ?? string.Empty
+        };
+
+        candidates.Remove(string.Empty);
+        return candidates.Contains(normalizedMalDefault);
+    }
+
+    private static string? NormalizeTitleForComparison(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return null;
+        }
+
+        var normalized = title.Normalize(NormalizationForm.FormKC).Trim();
+        var builder = new StringBuilder(normalized.Length);
+        foreach (var c in normalized)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                continue;
+            }
+
+            builder.Append(char.ToLowerInvariant(c));
+        }
+
+        return builder.Length == 0 ? null : builder.ToString();
+    }
+
+    private static string ApplyKnownChineseTitleOverrides(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return title ?? string.Empty;
+        }
+
+        var trimmed = title.Trim();
+        if (trimmed.StartsWith("葬送的芙莉莲 ～", StringComparison.Ordinal) &&
+            trimmed.EndsWith("的魔法～", StringComparison.Ordinal))
+        {
+            return "葬送的芙莉莲";
+        }
+
+        return trimmed;
     }
 
     #endregion
