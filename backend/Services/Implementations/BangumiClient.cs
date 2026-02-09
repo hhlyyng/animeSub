@@ -79,6 +79,36 @@ namespace backend.Services.Implementations
                 return subjectDetail;
             }, $"GetSubjectDetail({subjectId})");
 
+        public Task<JsonElement> GetSubjectEpisodesAsync(int subjectId, int limit = 100, int offset = 0) =>
+            ExecuteAsync(async () =>
+            {
+                var response = await HttpClient.GetAsync($"v0/episodes?subject_id={subjectId}&type=0&limit={limit}&offset={offset}");
+                response.EnsureSuccessStatusCode();
+
+                var content = await response.Content.ReadAsStringAsync();
+                var root = JsonDocument.Parse(content).RootElement;
+                if (root.TryGetProperty("data", out var data))
+                {
+                    Logger.LogInformation("Retrieved episode page for subject ID {SubjectId}, Count={Count}", subjectId, data.GetArrayLength());
+                    return data;
+                }
+
+                Logger.LogInformation("Retrieved episode payload for subject ID {SubjectId} without data wrapper", subjectId);
+                return root;
+            }, $"GetSubjectEpisodes({subjectId})");
+
+        public Task<JsonElement> GetSubjectRelationsAsync(int subjectId) =>
+            ExecuteAsync(async () =>
+            {
+                var response = await HttpClient.GetAsync($"v0/subjects/{subjectId}/subjects");
+                response.EnsureSuccessStatusCode();
+
+                var content = await response.Content.ReadAsStringAsync();
+                var related = JsonDocument.Parse(content).RootElement;
+                Logger.LogInformation("Retrieved related subjects for ID {SubjectId}", subjectId);
+                return related;
+            }, $"GetSubjectRelations({subjectId})");
+
         public Task<JsonElement> GetFullCalendarAsync() =>
             ExecuteAsync(async () =>
             {

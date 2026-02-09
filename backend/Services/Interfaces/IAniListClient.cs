@@ -1,4 +1,5 @@
 using backend.Models;
+using System.Text.Json;
 
 namespace backend.Services.Interfaces;
 
@@ -18,4 +19,18 @@ public interface IAniListClient
     /// <param name="limit">Number of anime to retrieve</param>
     /// <returns>List of trending anime</returns>
     Task<List<AniListAnimeInfo>> GetTrendingAnimeAsync(int limit = 10);
+
+    /// <summary>
+    /// Search an anime media by title and return season/relations payload for episode offset inference.
+    /// </summary>
+    /// <param name="title">Anime title query</param>
+    /// <returns>AniList Media Json payload, or null if unavailable</returns>
+    Task<JsonElement?> SearchAnimeSeasonDataAsync(string title);
+
+    /// <summary>
+    /// Get an AniList media payload by AniList ID for relation-chain traversal.
+    /// </summary>
+    /// <param name="anilistId">AniList media ID</param>
+    /// <returns>AniList Media Json payload, or null if unavailable</returns>
+    Task<JsonElement?> GetAnimeSeasonDataByIdAsync(int anilistId);
 }

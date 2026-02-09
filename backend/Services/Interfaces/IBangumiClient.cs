@@ -25,6 +25,22 @@ public interface IBangumiClient
     Task<JsonElement> GetSubjectDetailAsync(int subjectId);
 
     /// <summary>
+    /// Get episodes for a subject. Bangumi v0 returns both season episode number (ep) and absolute sort index (sort).
+    /// </summary>
+    /// <param name="subjectId">Bangumi subject ID</param>
+    /// <param name="limit">Page size</param>
+    /// <param name="offset">Page offset</param>
+    /// <returns>JsonElement containing episode list data</returns>
+    Task<JsonElement> GetSubjectEpisodesAsync(int subjectId, int limit = 100, int offset = 0);
+
+    /// <summary>
+    /// Get related subjects for a subject (e.g. prequel/sequel).
+    /// </summary>
+    /// <param name="subjectId">Bangumi subject ID</param>
+    /// <returns>JsonElement containing related subject list</returns>
+    Task<JsonElement> GetSubjectRelationsAsync(int subjectId);
+
+    /// <summary>
     /// Get the full weekly calendar with all days' anime
     /// </summary>
     /// <returns>JsonElement containing the entire week's schedule</returns>

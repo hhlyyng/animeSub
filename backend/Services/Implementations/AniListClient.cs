@@ -201,5 +201,110 @@ namespace backend.Services.Implementations
                 return new List<AniListAnimeInfo>();
             }
         }
+
+        public Task<JsonElement?> SearchAnimeSeasonDataAsync(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                return Task.FromResult<JsonElement?>(null);
+            }
+
+            const string query = @"
+                query ($search: String) {
+                    Media(search: $search, type: ANIME) {
+                        id
+                        idMal
+                        episodes
+                        nextAiringEpisode {
+                            episode
+                        }
+                        relations {
+                            edges {
+                                relationType
+                                node {
+                                    id
+                                    idMal
+                                    type
+                                    episodes
+                                }
+                            }
+                        }
+                    }
+                }";
+
+            return ExecuteMediaQueryAsync(query, new { search = title }, $"SearchAnimeSeasonData({title})");
+        }
+
+        public Task<JsonElement?> GetAnimeSeasonDataByIdAsync(int anilistId)
+        {
+            if (anilistId <= 0)
+            {
+                return Task.FromResult<JsonElement?>(null);
+            }
+
+            const string query = @"
+                query ($id: Int) {
+                    Media(id: $id, type: ANIME) {
+                        id
+                        idMal
+                        episodes
+                        nextAiringEpisode {
+                            episode
+                        }
+                        relations {
+                            edges {
+                                relationType
+                                node {
+                                    id
+                                    idMal
+                                    type
+                                    episodes
+                                }
+                            }
+                        }
+                    }
+                }";
+
+            return ExecuteMediaQueryAsync(query, new { id = anilistId }, $"GetAnimeSeasonDataById({anilistId})");
+        }
+
+        private async Task<JsonElement?> ExecuteMediaQueryAsync(string query, object variables, string operationName)
+        {
+            try
+            {
+                var payload = new { query, variables };
+                using var content = new StringContent(
+                    JsonSerializer.Serialize(payload),
+                    Encoding.UTF8,
+                    "application/json");
+
+                using var response = await HttpClient.PostAsync("", content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Logger.LogWarning(
+                        "{Operation} returned non-success status {StatusCode}",
+                        operationName,
+                        response.StatusCode);
+                    return null;
+                }
+
+                using var stream = await response.Content.ReadAsStreamAsync();
+                using var doc = await JsonDocument.ParseAsync(stream);
+                if (!doc.RootElement.TryGetProperty("data", out var dataElement) ||
+                    !dataElement.TryGetProperty("Media", out var mediaElement) ||
+                    mediaElement.ValueKind == JsonValueKind.Null)
+                {
+                    Logger.LogWarning("{Operation} returned missing Media payload", operationName);
+                    return null;
+                }
+
+                return mediaElement.Clone();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "{Operation} failed while querying AniList", operationName);
+                return null;
+            }
+        }
     }
 }

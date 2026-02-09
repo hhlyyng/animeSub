@@ -27,6 +27,8 @@ public class MikanControllerTests : IDisposable
     private readonly ServiceProvider _serviceProvider;
     private readonly Mock<IMikanClient> _mikanClientMock;
     private readonly Mock<IBangumiClient> _bangumiClientMock;
+    private readonly Mock<IAniListClient> _aniListClientMock;
+    private readonly Mock<IJikanClient> _jikanClientMock;
     private readonly Mock<IQBittorrentService> _qbittorrentServiceMock;
     private readonly Mock<ILogger<MikanController>> _loggerMock;
     private readonly MikanController _sut;
@@ -48,12 +50,32 @@ public class MikanControllerTests : IDisposable
 
         _mikanClientMock = new Mock<IMikanClient>();
         _bangumiClientMock = new Mock<IBangumiClient>();
+        _aniListClientMock = new Mock<IAniListClient>();
+        _jikanClientMock = new Mock<IJikanClient>();
         _qbittorrentServiceMock = new Mock<IQBittorrentService>();
         _loggerMock = new Mock<ILogger<MikanController>>();
+
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectEpisodesAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(ParseJson("[]"));
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectRelationsAsync(It.IsAny<int>()))
+            .ReturnsAsync(ParseJson("[]"));
+        _aniListClientMock
+            .Setup(s => s.SearchAnimeSeasonDataAsync(It.IsAny<string>()))
+            .ReturnsAsync((JsonElement?)null);
+        _aniListClientMock
+            .Setup(s => s.GetAnimeSeasonDataByIdAsync(It.IsAny<int>()))
+            .ReturnsAsync((JsonElement?)null);
+        _jikanClientMock
+            .Setup(s => s.GetAnimeDetailAsync(It.IsAny<int>()))
+            .ReturnsAsync((JsonElement?)null);
 
         _sut = new MikanController(
             _mikanClientMock.Object,
             _bangumiClientMock.Object,
+            _aniListClientMock.Object,
+            _jikanClientMock.Object,
             _qbittorrentServiceMock.Object,
             _loggerMock.Object,
             _serviceProvider);
@@ -382,6 +404,198 @@ public class MikanControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task GetFeed_WhenSeasonScopedAndAbsoluteEpisodesMixed_NormalizesAbsoluteEpisodesOnly()
+    {
+        // Arrange
+        _mikanClientMock
+            .Setup(s => s.GetParsedFeedAsync("999"))
+            .ReturnsAsync(new MikanFeedResponse
+            {
+                SeasonName = "Season 2",
+                Items = new List<ParsedRssItem>
+                {
+                    new() { Title = "[A] Frieren S02E03 [1080P]", TorrentHash = "h1", Episode = 3, PublishedAt = DateTime.UtcNow.AddDays(-3) },
+                    new() { Title = "[A] Frieren S02E04 [1080P]", TorrentHash = "h2", Episode = 4, PublishedAt = DateTime.UtcNow.AddDays(-2) },
+                    new() { Title = "[B] Frieren EP31 [1080P]", TorrentHash = "h3", Episode = 31, PublishedAt = DateTime.UtcNow.AddDays(-1) },
+                    new() { Title = "[B] Frieren EP32 [1080P]", TorrentHash = "h4", Episode = 32, PublishedAt = DateTime.UtcNow }
+                }
+            });
+
+        var bangumiDetail = JsonDocument.Parse("{\"eps\":12}").RootElement.Clone();
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectDetailAsync(9999))
+            .ReturnsAsync(bangumiDetail);
+
+        // Act
+        var response = await _sut.GetFeed("999", "9999");
+
+        // Assert
+        response.Result.Should().BeOfType<OkObjectResult>();
+        var payload = ((OkObjectResult)response.Result!).Value.Should().BeAssignableTo<MikanFeedResponse>().Subject;
+        payload.EpisodeOffset.Should().Be(28);
+
+        var s02e04 = payload.Items.Single(i => i.Title.Contains("S02E04", StringComparison.OrdinalIgnoreCase));
+        var ep32 = payload.Items.Single(i => i.Title.Contains("EP32", StringComparison.OrdinalIgnoreCase));
+
+        s02e04.Episode.Should().Be(4);
+        ep32.Episode.Should().Be(4);
+        payload.LatestEpisode.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task GetFeed_WhenBangumiSortEpisodeMapExists_NormalizesAbsoluteEpisodesBySortMapping()
+    {
+        // Arrange
+        _mikanClientMock
+            .Setup(s => s.GetParsedFeedAsync("515759"))
+            .ReturnsAsync(new MikanFeedResponse
+            {
+                SeasonName = "Season 2",
+                Items = new List<ParsedRssItem>
+                {
+                    new() { Title = "[A] Frieren S02E04 [1080P]", TorrentHash = "h1", Episode = 4, PublishedAt = DateTime.UtcNow.AddDays(-1) },
+                    new() { Title = "[B] Frieren EP32 [1080P]", TorrentHash = "h2", Episode = 32, PublishedAt = DateTime.UtcNow }
+                }
+            });
+
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectDetailAsync(515759))
+            .ReturnsAsync(ParseJson("{\"eps\":10,\"name\":\"Sousou no Frieren 2nd Season\"}"));
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectEpisodesAsync(515759, It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(ParseJson("[{\"ep\":3,\"sort\":31},{\"ep\":4,\"sort\":32}]"));
+
+        // Act
+        var response = await _sut.GetFeed("515759", "515759");
+
+        // Assert
+        response.Result.Should().BeOfType<OkObjectResult>();
+        var payload = ((OkObjectResult)response.Result!).Value.Should().BeAssignableTo<MikanFeedResponse>().Subject;
+        payload.EpisodeOffset.Should().Be(28);
+        payload.Items.Single(i => i.Title.Contains("S02E04", StringComparison.OrdinalIgnoreCase)).Episode.Should().Be(4);
+        payload.Items.Single(i => i.Title.Contains("EP32", StringComparison.OrdinalIgnoreCase)).Episode.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task GetFeed_WhenSeasonHintTitleUsesAbsoluteEpisode_DoesNotTreatAbsoluteAsSeasonScoped()
+    {
+        // Arrange
+        _mikanClientMock
+            .Setup(s => s.GetParsedFeedAsync("3821"))
+            .ReturnsAsync(new MikanFeedResponse
+            {
+                SeasonName = "Mikan Project - 葬送的芙莉莲 第二季",
+                Items = new List<ParsedRssItem>
+                {
+                    new() { Title = "[黒ネズミたち] 葬送的芙莉莲 第二季 / Sousou no Frieren 2nd Season - 32", TorrentHash = "h1", Episode = 32, PublishedAt = DateTime.UtcNow },
+                    new() { Title = "[Skymoon-Raws] 葬送的芙莉莲 第二季 / Sousou no Frieren 2nd Season - 04", TorrentHash = "h2", Episode = 4, PublishedAt = DateTime.UtcNow.AddMinutes(-1) }
+                }
+            });
+
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectDetailAsync(515759))
+            .ReturnsAsync(ParseJson("{\"eps\":10,\"name\":\"Sousou no Frieren 2nd Season\"}"));
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectEpisodesAsync(515759, It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(ParseJson("[{\"ep\":3,\"sort\":31},{\"ep\":4,\"sort\":32}]"));
+
+        // Act
+        var response = await _sut.GetFeed("3821", "515759");
+
+        // Assert
+        response.Result.Should().BeOfType<OkObjectResult>();
+        var payload = ((OkObjectResult)response.Result!).Value.Should().BeAssignableTo<MikanFeedResponse>().Subject;
+        payload.EpisodeOffset.Should().Be(28);
+        payload.Items.Single(i => i.Title.Contains("2nd Season - 32", StringComparison.OrdinalIgnoreCase)).Episode.Should().Be(4);
+        payload.LatestEpisode.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task GetFeed_WhenBangumiPrequelRelationResolved_UsesPrequelOffsetFallback()
+    {
+        // Arrange
+        _mikanClientMock
+            .Setup(s => s.GetParsedFeedAsync("6000"))
+            .ReturnsAsync(new MikanFeedResponse
+            {
+                SeasonName = "Season 2",
+                Items = new List<ParsedRssItem>
+                {
+                    new() { Title = "Frieren EP31", TorrentHash = "h1", Episode = 31, PublishedAt = DateTime.UtcNow.AddDays(-1) },
+                    new() { Title = "Frieren EP32", TorrentHash = "h2", Episode = 32, PublishedAt = DateTime.UtcNow }
+                }
+            });
+
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectDetailAsync(6000))
+            .ReturnsAsync(ParseJson("{\"eps\":10,\"name\":\"Sousou no Frieren 2nd Season\"}"));
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectEpisodesAsync(6000, It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(ParseJson("[]"));
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectRelationsAsync(6000))
+            .ReturnsAsync(ParseJson("[{\"id\":400602,\"type\":2,\"relation\":\"前传\"}]"));
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectDetailAsync(400602))
+            .ReturnsAsync(ParseJson("{\"eps\":28}"));
+
+        // Act
+        var response = await _sut.GetFeed("6000", "6000");
+
+        // Assert
+        response.Result.Should().BeOfType<OkObjectResult>();
+        var payload = ((OkObjectResult)response.Result!).Value.Should().BeAssignableTo<MikanFeedResponse>().Subject;
+        payload.EpisodeOffset.Should().Be(28);
+        payload.Items.Select(i => i.Episode).Should().BeEquivalentTo(new int?[] { 3, 4 });
+    }
+
+    [Fact]
+    public async Task GetFeed_WhenBangumiOffsetUnavailable_UsesAniListAndJikanFallbackOffset()
+    {
+        // Arrange
+        _mikanClientMock
+            .Setup(s => s.GetParsedFeedAsync("7000"))
+            .ReturnsAsync(new MikanFeedResponse
+            {
+                SeasonName = "Season 2",
+                Items = new List<ParsedRssItem>
+                {
+                    new() { Title = "Frieren EP31", TorrentHash = "h1", Episode = 31, PublishedAt = DateTime.UtcNow.AddDays(-1) },
+                    new() { Title = "Frieren EP32", TorrentHash = "h2", Episode = 32, PublishedAt = DateTime.UtcNow }
+                }
+            });
+
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectDetailAsync(7000))
+            .ReturnsAsync(ParseJson("{\"eps\":10,\"name\":\"Sousou no Frieren 2nd Season\"}"));
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectEpisodesAsync(7000, It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(ParseJson("[]"));
+        _bangumiClientMock
+            .Setup(s => s.GetSubjectRelationsAsync(7000))
+            .ReturnsAsync(ParseJson("[]"));
+
+        _aniListClientMock
+            .Setup(s => s.SearchAnimeSeasonDataAsync("Sousou no Frieren 2nd Season"))
+            .ReturnsAsync(ParseJson("{\"id\":182255,\"relations\":{\"edges\":[{\"relationType\":\"PREQUEL\",\"node\":{\"id\":154587,\"idMal\":52991,\"type\":\"ANIME\",\"episodes\":null}}]}}"));
+        _aniListClientMock
+            .Setup(s => s.GetAnimeSeasonDataByIdAsync(154587))
+            .ReturnsAsync(ParseJson("{\"id\":154587,\"relations\":{\"edges\":[]}}"));
+        _jikanClientMock
+            .Setup(s => s.GetAnimeDetailAsync(52991))
+            .ReturnsAsync(ParseJson("{\"episodes\":28}"));
+
+        // Act
+        var response = await _sut.GetFeed("7000", "7000");
+
+        // Assert
+        response.Result.Should().BeOfType<OkObjectResult>();
+        var payload = ((OkObjectResult)response.Result!).Value.Should().BeAssignableTo<MikanFeedResponse>().Subject;
+        payload.EpisodeOffset.Should().Be(28);
+        payload.Items.Select(i => i.Episode).Should().BeEquivalentTo(new int?[] { 3, 4 });
+    }
+
+    [Fact]
     public async Task PauseTorrent_WhenManualRecordExists_UpdatesStatusToPending()
     {
         // Arrange
@@ -504,6 +718,11 @@ public class MikanControllerTests : IDisposable
         // Assert
         var objectResult = result.Should().BeOfType<ObjectResult>().Subject;
         objectResult.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    private static JsonElement ParseJson(string json)
+    {
+        return JsonDocument.Parse(json).RootElement.Clone();
     }
 
     private async Task SeedManualDownloadAsync(string hash, DownloadStatus status)

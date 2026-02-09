@@ -23,6 +23,8 @@ public class MikanController : ControllerBase
 {
     private readonly IMikanClient _mikanClient;
     private readonly IBangumiClient _bangumiClient;
+    private readonly IAniListClient _aniListClient;
+    private readonly IJikanClient _jikanClient;
     private readonly IQBittorrentService _qbittorrentService;
     private readonly ILogger<MikanController> _logger;
     private readonly IServiceProvider _serviceProvider;
@@ -33,12 +35,16 @@ public class MikanController : ControllerBase
     public MikanController(
         IMikanClient mikanClient,
         IBangumiClient bangumiClient,
+        IAniListClient aniListClient,
+        IJikanClient jikanClient,
         IQBittorrentService qbittorrentService,
         ILogger<MikanController> logger,
         IServiceProvider serviceProvider)
     {
         _mikanClient = mikanClient;
         _bangumiClient = bangumiClient;
+        _aniListClient = aniListClient;
+        _jikanClient = jikanClient;
         _qbittorrentService = qbittorrentService;
         _logger = logger;
         _serviceProvider = serviceProvider;
@@ -132,8 +138,46 @@ public class MikanController : ControllerBase
         try
         {
             var feed = await _mikanClient.GetParsedFeedAsync(mikanId);
-            var expectedEpisodes = await TryGetExpectedEpisodeCountAsync(bangumiId);
-            ApplyEpisodeOffsetNormalization(feed, expectedEpisodes);
+            var parsedBangumiId = TryParsePositiveInt(bangumiId);
+            var bangumiDetail = await TryGetBangumiSubjectDetailAsync(parsedBangumiId);
+            var expectedEpisodes = TryGetExpectedEpisodeCount(bangumiDetail);
+
+            var normalized = false;
+            if (parsedBangumiId.HasValue)
+            {
+                normalized = await TryApplyBangumiEpisodeMapNormalizationAsync(
+                    feed,
+                    parsedBangumiId.Value,
+                    expectedEpisodes);
+
+                if (!normalized)
+                {
+                    var bangumiOffset = await TryResolveOffsetFromBangumiRelationsAsync(parsedBangumiId.Value);
+                    if (bangumiOffset.HasValue)
+                    {
+                        normalized = ApplyExplicitOffsetNormalization(feed, bangumiOffset.Value, expectedEpisodes);
+                    }
+                }
+            }
+
+            if (!normalized)
+            {
+                var anilistSearchTitle = TryResolveAniListSearchTitle(bangumiDetail, feed);
+                if (!string.IsNullOrWhiteSpace(anilistSearchTitle))
+                {
+                    var aniListOffset = await TryResolveOffsetFromAniListJikanAsync(anilistSearchTitle);
+                    if (aniListOffset.HasValue)
+                    {
+                        normalized = ApplyExplicitOffsetNormalization(feed, aniListOffset.Value, expectedEpisodes);
+                    }
+                }
+            }
+
+            if (!normalized)
+            {
+                ApplyEpisodeOffsetNormalization(feed, expectedEpisodes);
+            }
+
             UpdateLatestMetadata(feed);
             return Ok(feed);
         }
@@ -587,102 +631,807 @@ public class MikanController : ControllerBase
         return null;
     }
 
-    private async Task<int?> TryGetExpectedEpisodeCountAsync(string? bangumiId)
+    private static int? TryParsePositiveInt(string? value)
     {
-        if (!int.TryParse(bangumiId, out var parsedBangumiId) || parsedBangumiId <= 0)
+        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : null;
+    }
+
+    private async Task<JsonElement?> TryGetBangumiSubjectDetailAsync(int? bangumiId)
+    {
+        if (!bangumiId.HasValue)
         {
             return null;
         }
 
         try
         {
-            var detail = await _bangumiClient.GetSubjectDetailAsync(parsedBangumiId);
-            if (!detail.TryGetProperty("eps", out var epsElement))
-            {
-                return null;
-            }
-
-            if (epsElement.ValueKind == JsonValueKind.Number &&
-                epsElement.TryGetInt32(out var numeric) &&
-                numeric > 0)
-            {
-                return numeric;
-            }
-
-            if (epsElement.ValueKind == JsonValueKind.String &&
-                int.TryParse(epsElement.GetString(), out var parsed) &&
-                parsed > 0)
-            {
-                return parsed;
-            }
+            var detail = await _bangumiClient.GetSubjectDetailAsync(bangumiId.Value);
+            return detail.Clone();
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to fetch Bangumi episode metadata for BangumiId {BangumiId}", bangumiId);
+            _logger.LogWarning(ex, "Failed to fetch Bangumi subject detail for BangumiId {BangumiId}", bangumiId.Value);
+            return null;
+        }
+    }
+
+    private static int? TryGetExpectedEpisodeCount(JsonElement? bangumiDetail)
+    {
+        if (!bangumiDetail.HasValue)
+        {
+            return null;
+        }
+
+        if (TryReadPositiveInt(bangumiDetail.Value, "eps", out var expected))
+        {
+            return expected;
+        }
+
+        if (TryReadPositiveInt(bangumiDetail.Value, "total_episodes", out expected))
+        {
+            return expected;
         }
 
         return null;
     }
 
+    private async Task<bool> TryApplyBangumiEpisodeMapNormalizationAsync(
+        MikanFeedResponse feed,
+        int bangumiId,
+        int? expectedEpisodes)
+    {
+        var sortToEpisodeMap = await TryGetBangumiAbsoluteEpisodeMapAsync(bangumiId);
+        if (sortToEpisodeMap == null || sortToEpisodeMap.Count == 0)
+        {
+            return false;
+        }
+
+        return ApplyBangumiEpisodeMapNormalization(feed, sortToEpisodeMap, expectedEpisodes);
+    }
+
+    private async Task<Dictionary<int, int>?> TryGetBangumiAbsoluteEpisodeMapAsync(int bangumiId)
+    {
+        try
+        {
+            const int pageSize = 100;
+            var map = new Dictionary<int, int>();
+            var offset = 0;
+            var pages = 0;
+
+            while (pages < 5)
+            {
+                var page = await _bangumiClient.GetSubjectEpisodesAsync(bangumiId, pageSize, offset);
+                if (page.ValueKind != JsonValueKind.Array || page.GetArrayLength() == 0)
+                {
+                    break;
+                }
+
+                foreach (var item in page.EnumerateArray())
+                {
+                    if (!TryReadPositiveInt(item, "sort", out var absoluteEpisode))
+                    {
+                        continue;
+                    }
+
+                    if (!TryReadPositiveInt(item, "ep", out var seasonEpisode))
+                    {
+                        continue;
+                    }
+
+                    map[absoluteEpisode] = seasonEpisode;
+                }
+
+                if (page.GetArrayLength() < pageSize)
+                {
+                    break;
+                }
+
+                pages++;
+                offset += pageSize;
+            }
+
+            return map.Count > 0 ? map : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch Bangumi episodes for BangumiId {BangumiId}", bangumiId);
+            return null;
+        }
+    }
+
+    private static bool ApplyBangumiEpisodeMapNormalization(
+        MikanFeedResponse feed,
+        IReadOnlyDictionary<int, int> sortToEpisodeMap,
+        int? expectedEpisodes)
+    {
+        var entries = feed.Items
+            .Where(item => item.Episode.HasValue)
+            .Select(item => new EpisodeNormalizationEntry(
+                item,
+                item.Episode!.Value,
+                ResolveSeasonScopedEpisode(item.Title, item.Episode!.Value)))
+            .ToList();
+
+        if (entries.Count == 0)
+        {
+            return false;
+        }
+
+        var seasonScopedMax = entries
+            .Where(entry => entry.SeasonScopedEpisode.HasValue)
+            .Select(entry => entry.SeasonScopedEpisode!.Value)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        var mapSeasonMax = sortToEpisodeMap.Values.DefaultIfEmpty(0).Max();
+        var thresholdBase = new[] { seasonScopedMax, expectedEpisodes ?? 0, mapSeasonMax }.Max();
+        var absoluteTriggerThreshold = thresholdBase + 1;
+
+        var offsets = new List<int>();
+        var normalizedCount = 0;
+
+        foreach (var entry in entries)
+        {
+            if (entry.SeasonScopedEpisode.HasValue)
+            {
+                continue;
+            }
+
+            if (entry.Episode <= absoluteTriggerThreshold)
+            {
+                continue;
+            }
+
+            if (!sortToEpisodeMap.TryGetValue(entry.Episode, out var seasonEpisode) || seasonEpisode <= 0)
+            {
+                continue;
+            }
+
+            if (entry.Episode == seasonEpisode)
+            {
+                continue;
+            }
+
+            entry.Item.Episode = seasonEpisode;
+            normalizedCount++;
+
+            var diff = entry.Episode - seasonEpisode;
+            if (diff > 0)
+            {
+                offsets.Add(diff);
+            }
+        }
+
+        if (normalizedCount == 0)
+        {
+            return false;
+        }
+
+        if (offsets.Count > 0)
+        {
+            feed.EpisodeOffset = offsets
+                .GroupBy(value => value)
+                .OrderByDescending(group => group.Count())
+                .ThenByDescending(group => group.Key)
+                .Select(group => group.Key)
+                .First();
+        }
+
+        return true;
+    }
+
+    private async Task<int?> TryResolveOffsetFromBangumiRelationsAsync(int bangumiId)
+    {
+        try
+        {
+            var visited = new HashSet<int> { bangumiId };
+            var queue = new Queue<int>();
+            queue.Enqueue(bangumiId);
+
+            var totalOffset = 0;
+            var depthGuard = 0;
+
+            while (queue.Count > 0 && depthGuard < 12)
+            {
+                depthGuard++;
+                var currentSubjectId = queue.Dequeue();
+                var relatedSubjects = await _bangumiClient.GetSubjectRelationsAsync(currentSubjectId);
+                if (relatedSubjects.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                foreach (var relationItem in relatedSubjects.EnumerateArray())
+                {
+                    if (!TryReadPositiveInt(relationItem, "id", out var relatedSubjectId))
+                    {
+                        continue;
+                    }
+
+                    if (!TryReadPositiveInt(relationItem, "type", out var relatedType) || relatedType != 2)
+                    {
+                        continue;
+                    }
+
+                    if (!TryReadString(relationItem, "relation", out var relationName) ||
+                        !IsPrequelRelation(relationName))
+                    {
+                        continue;
+                    }
+
+                    if (!visited.Add(relatedSubjectId))
+                    {
+                        continue;
+                    }
+
+                    queue.Enqueue(relatedSubjectId);
+
+                    var detail = await _bangumiClient.GetSubjectDetailAsync(relatedSubjectId);
+                    var episodes = TryGetExpectedEpisodeCount(detail);
+                    if (episodes.HasValue)
+                    {
+                        totalOffset += episodes.Value;
+                    }
+                }
+            }
+
+            return totalOffset > 0 ? totalOffset : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to resolve Bangumi prequel offset for BangumiId {BangumiId}", bangumiId);
+            return null;
+        }
+    }
+
+    private static bool IsPrequelRelation(string relationName)
+    {
+        var normalized = relationName.Trim().ToLowerInvariant();
+        return normalized.Contains("prequel", StringComparison.Ordinal) ||
+               normalized.Contains("\u524d\u4f20", StringComparison.Ordinal) ||
+               normalized.Contains("\u524d\u4f5c", StringComparison.Ordinal);
+    }
+
+    private async Task<int?> TryResolveOffsetFromAniListJikanAsync(string searchTitle)
+    {
+        try
+        {
+            var media = await _aniListClient.SearchAnimeSeasonDataAsync(searchTitle);
+            if (!media.HasValue)
+            {
+                return null;
+            }
+
+            var offset = await SumAniListPrequelEpisodesAsync(media.Value);
+            return offset > 0 ? offset : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to resolve AniList/Jikan offset for title {Title}", searchTitle);
+            return null;
+        }
+    }
+
+    private async Task<int> SumAniListPrequelEpisodesAsync(JsonElement rootMedia)
+    {
+        var queue = new Queue<AniListRelationNode>(GetAniListPrequelNodes(rootMedia));
+        if (queue.Count == 0)
+        {
+            return 0;
+        }
+
+        var visitedAniListIds = new HashSet<int>();
+        var totalOffset = 0;
+        var depthGuard = 0;
+
+        while (queue.Count > 0 && depthGuard < 16)
+        {
+            depthGuard++;
+            var node = queue.Dequeue();
+
+            if (node.AniListId > 0 && !visitedAniListIds.Add(node.AniListId))
+            {
+                continue;
+            }
+
+            var episodes = node.Episodes;
+            if (!episodes.HasValue || episodes.Value <= 0)
+            {
+                episodes = await TryGetEpisodesFromJikanAsync(node.MalId);
+            }
+
+            if (episodes.HasValue && episodes.Value > 0)
+            {
+                totalOffset += episodes.Value;
+            }
+
+            if (node.AniListId <= 0)
+            {
+                continue;
+            }
+
+            var prequelMedia = await _aniListClient.GetAnimeSeasonDataByIdAsync(node.AniListId);
+            if (!prequelMedia.HasValue)
+            {
+                continue;
+            }
+
+            foreach (var prequelNode in GetAniListPrequelNodes(prequelMedia.Value))
+            {
+                if (prequelNode.AniListId <= 0 || visitedAniListIds.Contains(prequelNode.AniListId))
+                {
+                    continue;
+                }
+
+                queue.Enqueue(prequelNode);
+            }
+        }
+
+        return totalOffset;
+    }
+
+    private static IEnumerable<AniListRelationNode> GetAniListPrequelNodes(JsonElement media)
+    {
+        if (!media.TryGetProperty("relations", out var relations) ||
+            !relations.TryGetProperty("edges", out var edges) ||
+            edges.ValueKind != JsonValueKind.Array)
+        {
+            yield break;
+        }
+
+        foreach (var edge in edges.EnumerateArray())
+        {
+            if (!TryReadString(edge, "relationType", out var relationType) ||
+                !relationType.Equals("PREQUEL", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!edge.TryGetProperty("node", out var node) || node.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (!TryReadString(node, "type", out var nodeType) ||
+                !nodeType.Equals("ANIME", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var aniListId = TryReadPositiveInt(node, "id", out var parsedAniListId) ? parsedAniListId : 0;
+            var malId = TryReadPositiveInt(node, "idMal", out var parsedMalId) ? parsedMalId : (int?)null;
+            var episodes = TryReadPositiveInt(node, "episodes", out var parsedEpisodes) ? parsedEpisodes : (int?)null;
+
+            if (aniListId > 0 || malId.HasValue)
+            {
+                yield return new AniListRelationNode(aniListId, malId, episodes);
+            }
+        }
+    }
+
+    private async Task<int?> TryGetEpisodesFromJikanAsync(int? malId)
+    {
+        if (!malId.HasValue || malId.Value <= 0)
+        {
+            return null;
+        }
+
+        var detail = await _jikanClient.GetAnimeDetailAsync(malId.Value);
+        if (!detail.HasValue)
+        {
+            return null;
+        }
+
+        return TryReadPositiveInt(detail.Value, "episodes", out var episodes) ? episodes : null;
+    }
+
+    private static string? TryResolveAniListSearchTitle(JsonElement? bangumiDetail, MikanFeedResponse feed)
+    {
+        if (bangumiDetail.HasValue)
+        {
+            if (TryReadString(bangumiDetail.Value, "name", out var name) && !string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+
+            if (TryReadString(bangumiDetail.Value, "name_cn", out var nameCn) && !string.IsNullOrWhiteSpace(nameCn))
+            {
+                return nameCn;
+            }
+        }
+
+        var latestTitle = feed.Items
+            .OrderByDescending(item => item.PublishedAt)
+            .Select(item => item.Title)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+        if (string.IsNullOrWhiteSpace(latestTitle))
+        {
+            return null;
+        }
+
+        var cleaned = Regex.Replace(latestTitle, @"[\[\(【].*?[\]\)】]", " ");
+        cleaned = Regex.Replace(cleaned, @"\b(?:S\d{1,2}E\d{1,3}|EP?\s*\d{1,3})\b", " ", RegexOptions.IgnoreCase);
+        cleaned = Regex.Replace(cleaned, @"\s{2,}", " ").Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? null : cleaned;
+    }
+
+    private static bool ApplyExplicitOffsetNormalization(
+        MikanFeedResponse feed,
+        int offset,
+        int? expectedEpisodes)
+    {
+        if (offset <= 0)
+        {
+            return false;
+        }
+
+        var entries = feed.Items
+            .Where(item => item.Episode.HasValue)
+            .Select(item => new EpisodeNormalizationEntry(
+                item,
+                item.Episode!.Value,
+                ResolveSeasonScopedEpisode(item.Title, item.Episode!.Value)))
+            .ToList();
+        if (entries.Count == 0)
+        {
+            return false;
+        }
+
+        var seasonScopedMax = entries
+            .Where(entry => entry.SeasonScopedEpisode.HasValue)
+            .Select(entry => entry.SeasonScopedEpisode!.Value)
+            .DefaultIfEmpty(0)
+            .Max();
+
+        var trigger = Math.Max(seasonScopedMax, expectedEpisodes ?? 0) + 1;
+        var upperBound = Math.Max(seasonScopedMax, expectedEpisodes ?? 0);
+        if (upperBound <= 0)
+        {
+            upperBound = offset + 64;
+        }
+
+        var normalizedCount = 0;
+        foreach (var entry in entries)
+        {
+            if (entry.SeasonScopedEpisode.HasValue)
+            {
+                continue;
+            }
+
+            if (entry.Episode <= trigger)
+            {
+                continue;
+            }
+
+            var normalized = entry.Episode - offset;
+            if (normalized <= 0 || normalized > upperBound + 2)
+            {
+                continue;
+            }
+
+            entry.Item.Episode = normalized;
+            normalizedCount++;
+        }
+
+        if (normalizedCount == 0)
+        {
+            return false;
+        }
+
+        feed.EpisodeOffset = offset;
+        return true;
+    }
+
     private static void ApplyEpisodeOffsetNormalization(MikanFeedResponse feed, int? expectedEpisodes)
     {
-        var episodeNumbers = feed.Items
+        var entries = feed.Items
             .Where(item => item.Episode.HasValue)
-            .Select(item => item.Episode!.Value)
+            .Select(item => new EpisodeNormalizationEntry(
+                item,
+                item.Episode!.Value,
+                ResolveSeasonScopedEpisode(item.Title, item.Episode!.Value)))
+            .ToList();
+
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        var seasonScopedEpisodes = entries
+            .Where(e => e.SeasonScopedEpisode.HasValue)
+            .Select(e => e.SeasonScopedEpisode!.Value)
+            .Distinct()
             .OrderBy(value => value)
             .ToList();
 
-        if (episodeNumbers.Count == 0)
+        // Mixed numbering case: some groups use S02E04 while others use EP32.
+        if (seasonScopedEpisodes.Count > 0 &&
+            TryResolveMixedNumberingOffset(entries, seasonScopedEpisodes, out var mixedOffset))
+        {
+            var normalizedCount = ApplyOffsetToAbsoluteEpisodes(entries, mixedOffset, seasonScopedEpisodes.Max());
+            if (normalizedCount > 0)
+            {
+                feed.EpisodeOffset = mixedOffset;
+            }
+            return;
+        }
+
+        var episodeNumbers = entries
+            .Select(e => e.Episode)
+            .OrderBy(value => value)
+            .ToList();
+        var offset = ResolveLegacyOffset(feed.SeasonName, episodeNumbers, expectedEpisodes);
+        if (offset <= 0)
         {
             return;
         }
 
-        var minEpisode = episodeNumbers.First();
-        var maxEpisode = episodeNumbers.Last();
+        foreach (var entry in entries)
+        {
+            var normalized = entry.Episode - offset;
+            if (normalized > 0)
+            {
+                entry.Item.Episode = normalized;
+            }
+        }
+
+        feed.EpisodeOffset = offset;
+    }
+
+    private static bool TryReadPositiveInt(JsonElement source, string propertyName, out int value)
+    {
+        value = 0;
+        if (!source.TryGetProperty(propertyName, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number &&
+            element.TryGetInt32(out value) &&
+            value > 0)
+        {
+            return true;
+        }
+
+        if (element.ValueKind == JsonValueKind.String &&
+            int.TryParse(element.GetString(), out value) &&
+            value > 0)
+        {
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    private static bool TryReadString(JsonElement source, string propertyName, out string value)
+    {
+        value = string.Empty;
+        if (!source.TryGetProperty(propertyName, out var element))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            value = element.GetString() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(value);
+        }
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            value = element.GetRawText();
+            return !string.IsNullOrWhiteSpace(value);
+        }
+
+        return false;
+    }
+
+    private static int ResolveLegacyOffset(string? seasonName, IReadOnlyList<int> sortedEpisodes, int? expectedEpisodes)
+    {
+        if (sortedEpisodes.Count == 0)
+        {
+            return 0;
+        }
+
+        var minEpisode = sortedEpisodes[0];
+        var maxEpisode = sortedEpisodes[^1];
         if (minEpisode <= 1)
         {
-            return;
+            return 0;
         }
 
         var span = maxEpisode - minEpisode + 1;
-        var seasonNumber = TryExtractSeasonNumber(feed.SeasonName) ?? 1;
-        var offset = 0;
+        var seasonNumber = TryExtractSeasonNumber(seasonName) ?? 1;
 
         if (expectedEpisodes.HasValue && expectedEpisodes.Value > 0)
         {
             var expected = expectedEpisodes.Value;
             if (maxEpisode > expected && span <= expected + 2)
             {
-                offset = minEpisode - 1;
+                return minEpisode - 1;
+            }
+
+            return 0;
+        }
+
+        // Fallback heuristic when Bangumi metadata is unavailable.
+        if (seasonNumber > 1 && span <= 30)
+        {
+            return minEpisode - 1;
+        }
+
+        return 0;
+    }
+
+    private static bool TryResolveMixedNumberingOffset(
+        IReadOnlyList<EpisodeNormalizationEntry> entries,
+        IReadOnlyCollection<int> seasonScopedEpisodes,
+        out int offset)
+    {
+        offset = 0;
+        var seasonScopedSet = new HashSet<int>(seasonScopedEpisodes);
+        var seasonScopedMax = seasonScopedEpisodes.Max();
+        var nonSeasonEpisodes = entries
+            .Where(e => !e.SeasonScopedEpisode.HasValue)
+            .Select(e => e.Episode)
+            .Distinct()
+            .OrderBy(value => value)
+            .ToList();
+
+        if (nonSeasonEpisodes.Count == 0)
+        {
+            return false;
+        }
+
+        // Mixed numbering should be judged by season-scoped anchors first.
+        // Bangumi "eps" can sometimes be cumulative / stale and should not suppress offset detection.
+        var absoluteTriggerThreshold = seasonScopedMax + 2;
+        if (!nonSeasonEpisodes.Any(value => value > absoluteTriggerThreshold))
+        {
+            return false;
+        }
+
+        var candidateOffsets = new HashSet<int>();
+        foreach (var absoluteEpisode in nonSeasonEpisodes)
+        {
+            foreach (var relativeEpisode in seasonScopedSet)
+            {
+                var diff = absoluteEpisode - relativeEpisode;
+                if (diff > 0 && diff <= 500)
+                {
+                    candidateOffsets.Add(diff);
+                }
             }
         }
-        else if (seasonNumber > 1 && span <= 30)
+
+        if (candidateOffsets.Count == 0)
         {
-            // Fallback heuristic when Bangumi metadata is unavailable.
-            offset = minEpisode - 1;
+            return false;
         }
 
-        if (offset <= 0)
+        var upperBound = seasonScopedMax + 2;
+        var bestOffset = 0;
+        var bestScore = 0;
+
+        foreach (var candidate in candidateOffsets)
         {
-            return;
+            var score = 0;
+            foreach (var episode in nonSeasonEpisodes)
+            {
+                var normalized = episode - candidate;
+                if (normalized <= 0)
+                {
+                    continue;
+                }
+
+                if (normalized <= upperBound)
+                {
+                    score += 1;
+                }
+
+                if (seasonScopedSet.Contains(normalized))
+                {
+                    score += 2;
+                }
+            }
+
+            if (score > bestScore || (score == bestScore && candidate > bestOffset))
+            {
+                bestScore = score;
+                bestOffset = candidate;
+            }
         }
 
-        foreach (var item in feed.Items)
+        if (bestOffset <= 0 || bestScore < 2)
         {
-            if (!item.Episode.HasValue)
+            return false;
+        }
+
+        offset = bestOffset;
+        return true;
+    }
+
+    private static int ApplyOffsetToAbsoluteEpisodes(
+        IReadOnlyList<EpisodeNormalizationEntry> entries,
+        int offset,
+        int fallbackThreshold)
+    {
+        var threshold = fallbackThreshold + 2;
+        var upperBound = fallbackThreshold + 2;
+        var normalizedCount = 0;
+
+        foreach (var entry in entries)
+        {
+            if (entry.SeasonScopedEpisode.HasValue)
             {
                 continue;
             }
 
-            var normalized = item.Episode.Value - offset;
-            if (normalized > 0)
+            if (entry.Episode <= threshold)
             {
-                item.Episode = normalized;
+                continue;
+            }
+
+            var normalized = entry.Episode - offset;
+            if (normalized > 0 && normalized <= upperBound)
+            {
+                entry.Item.Episode = normalized;
+                normalizedCount++;
             }
         }
 
-        feed.EpisodeOffset = offset;
+        return normalizedCount;
     }
+
+    private static int? ResolveSeasonScopedEpisode(string? title, int episode)
+    {
+        var explicitSeasonScoped = TryExtractSeasonScopedEpisode(title);
+        return explicitSeasonScoped;
+    }
+
+    private static int? TryExtractSeasonScopedEpisode(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return null;
+        }
+
+        var seasonEpisodeMatch = Regex.Match(
+            title,
+            @"\bs\s*\d{1,2}\s*e\s*0*(\d{1,3})\b",
+            RegexOptions.IgnoreCase);
+        if (seasonEpisodeMatch.Success &&
+            int.TryParse(seasonEpisodeMatch.Groups[1].Value, out var seasonEpisode) &&
+            seasonEpisode > 0)
+        {
+            return seasonEpisode;
+        }
+
+        var chineseSeasonEpisodeMatch = Regex.Match(
+            title,
+            @"\u7b2c\s*[0-9\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]+\s*\u5b63[^\d]{0,16}(?:\u7b2c\s*)?0*(\d{1,3})\s*(?:\u8bdd|\u8a71|\u96c6)",
+            RegexOptions.IgnoreCase);
+        if (chineseSeasonEpisodeMatch.Success &&
+            int.TryParse(chineseSeasonEpisodeMatch.Groups[1].Value, out seasonEpisode) &&
+            seasonEpisode > 0)
+        {
+            return seasonEpisode;
+        }
+
+        return null;
+    }
+
+    private sealed record EpisodeNormalizationEntry(
+        ParsedRssItem Item,
+        int Episode,
+        int? SeasonScopedEpisode);
+
+    private sealed record AniListRelationNode(
+        int AniListId,
+        int? MalId,
+        int? Episodes);
 
     private static void UpdateLatestMetadata(MikanFeedResponse feed)
     {

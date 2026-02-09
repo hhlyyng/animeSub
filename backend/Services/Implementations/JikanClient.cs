@@ -43,4 +43,37 @@ public class JikanClient : ApiClientBase<JikanClient>, IJikanClient
             Logger.LogInformation("Retrieved {Count} top anime from Jikan/MAL", result.Data.Count);
             return result.Data;
         }, "GetTopAnime");
+
+    public async Task<JsonElement?> GetAnimeDetailAsync(int malId)
+    {
+        if (malId <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            var response = await HttpClient.GetAsync($"anime/{malId}");
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.LogWarning("GetAnimeDetail({MalId}) returned status {StatusCode}", malId, response.StatusCode);
+                return null;
+            }
+
+            var content = await response.Content.ReadAsStringAsync();
+            var root = JsonDocument.Parse(content).RootElement;
+            if (!root.TryGetProperty("data", out var data))
+            {
+                Logger.LogWarning("GetAnimeDetail({MalId}) response missing data payload", malId);
+                return null;
+            }
+
+            return data.Clone();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "GetAnimeDetail({MalId}) failed", malId);
+            return null;
+        }
+    }
 }
