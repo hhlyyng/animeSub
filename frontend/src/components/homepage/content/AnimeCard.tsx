@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import type { AnimeInfo } from "./AnimeInfoType";
+import type { AnimeInfo } from "../../../types/anime";
 import { useAppStore } from "../../../stores/useAppStores";
 
 type AnimeCardProps = {

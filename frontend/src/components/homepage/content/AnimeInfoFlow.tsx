@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { AnimeCard } from "./AnimeCard";
 import { AnimeDetailModal } from "./AnimeDetailModal";
-import type { AnimeInfo } from "./AnimeInfoType";
+import type { AnimeInfo } from "../../../types/anime";
 import { useAppStore } from "../../../stores/useAppStores";
 
 type AnimeFlowProps = {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import AnimeFlow from "./AnimeInfoFlow";
-import type { AnimeInfo } from "./AnimeInfoType";
+import type { AnimeInfo } from "../../../types/anime";
 import { useAppStore } from "../../../stores/useAppStores";
 
 const CACHE_KEYS = {

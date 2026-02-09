@@ -1,6 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import SideBar from "./SideBar";
-import DownloadPage from "./content/DownLoadPage";
+import DownloadPage from "./content/DownloadPage";
 import HomeContent from "./content/HomePageContent";
 import Setting from "./content/SettingPage";
 import { useAppStore } from "../../stores/useAppStores";

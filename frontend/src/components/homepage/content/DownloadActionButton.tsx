@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import DownloadIcon from "../../icon/DownloadIcon";
-import PlayTriangleIcon from "../../icon/PlayTriangleIcon";
-import { CloseIcon } from "../../icon/CloseIcon";
+import DownloadIcon from "../../icons/DownloadIcon";
+import PlayTriangleIcon from "../../icons/PlayTriangleIcon";
+import { CloseIcon } from "../../icons/CloseIcon";
 
 export type DownloadActionState = "idle" | "downloading" | "paused" | "completed";
 

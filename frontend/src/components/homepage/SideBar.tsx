@@ -4,12 +4,12 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 // Icon SVG imports
-import HomeIcon from "../icon/HomeIcon";
-import SettingIcon from "../icon/SettingIcon";
-import DownloadIcon from "../icon/DownloadIcon";
-import { DefaultSideBar, CollapseSideBarArrow, ExpandSideBarArrow } from "../icon/SidebarIcon";
-import GithubIcon from "../icon/GithubIcon";
-import LanguageToggleIcon from "../icon/LanguageToggleIcon";
+import HomeIcon from "../icons/HomeIcon";
+import SettingIcon from "../icons/SettingIcon";
+import DownloadIcon from "../icons/DownloadIcon";
+import { DefaultSideBar, CollapseSideBarArrow, ExpandSideBarArrow } from "../icons/SidebarIcon";
+import GithubIcon from "../icons/GithubIcon";
+import LanguageToggleIcon from "../icons/LanguageToggleIcon";
 
 type PageType = 'home' | 'setting' | 'download';
 
