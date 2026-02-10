@@ -16,6 +16,7 @@ public class AnimeDbContext : DbContext
     public DbSet<DownloadHistoryEntity> DownloadHistory { get; set; }
     public DbSet<MikanFeedCacheEntity> MikanFeedCaches { get; set; }
     public DbSet<MikanFeedItemEntity> MikanFeedItems { get; set; }
+    public DbSet<TopAnimeCacheEntity> TopAnimeCaches { get; set; }
 
     public AnimeDbContext(DbContextOptions<AnimeDbContext> options)
         : base(options)
@@ -99,6 +100,13 @@ public class AnimeDbContext : DbContext
             entity.HasIndex(e => e.MikanBangumiId);
             entity.HasIndex(e => e.TorrentHash);
             entity.HasIndex(e => e.PublishedAt);
+        });
+
+        // Configure top anime list cache snapshots
+        modelBuilder.Entity<TopAnimeCacheEntity>(entity =>
+        {
+            entity.HasKey(e => e.Source);
+            entity.HasIndex(e => e.UpdatedAt);
         });
     }
 }

@@ -24,6 +24,11 @@ public class AnimeAggregationService : IAnimeAggregationService
     private readonly IResilienceService _resilienceService;
     private readonly ILogger<AnimeAggregationService> _logger;
 
+    private const string TopBangumiCacheSource = "top:bangumi";
+    private const string TopAniListCacheSource = "top:anilist";
+    private const string TopMalCacheSource = "top:mal";
+    private static readonly TimeSpan TopListCacheTtl = TimeSpan.FromHours(24);
+
     public AnimeAggregationService(
         IBangumiClient bangumiClient,
         ITMDBClient tmdbClient,
@@ -416,6 +421,25 @@ public class AnimeAggregationService : IAnimeAggregationService
         _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} anime from Bangumi with enrichment", limit);
 
+        var (cachedTopBangumi, cachedTopBangumiUpdatedAt) = await TryReadTopListCacheAsync(
+            TopBangumiCacheSource,
+            allowStale: false);
+        if (cachedTopBangumi != null && cachedTopBangumi.Count > 0)
+        {
+            _logger.LogInformation("Returning Bangumi top list from persistent cache ({Count})", cachedTopBangumi.Count);
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Database,
+                IsStale = false,
+                Message = $"Top {cachedTopBangumi.Count} anime from Bangumi (cached)",
+                LastUpdated = cachedTopBangumiUpdatedAt,
+                Count = cachedTopBangumi.Count,
+                Animes = cachedTopBangumi,
+                RetryAttempts = 0
+            };
+        }
+
         try
         {
             var topSubjects = await _bangumiClient.SearchTopSubjectsAsync(limit);
@@ -559,6 +583,8 @@ public class AnimeAggregationService : IAnimeAggregationService
                     urlAnilist: anilistUrl);
             }
 
+            await SaveTopListCacheAsync(TopBangumiCacheSource, animeDtos);
+
             _logger.LogInformation("Retrieved {Count} top anime from Bangumi (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
@@ -571,6 +597,28 @@ public class AnimeAggregationService : IAnimeAggregationService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to fetch top anime from Bangumi");
+
+            var (fallbackTopBangumi, fallbackTopBangumiUpdatedAt) = await TryReadTopListCacheAsync(
+                TopBangumiCacheSource,
+                allowStale: true);
+            if (fallbackTopBangumi != null && fallbackTopBangumi.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Using stale Bangumi top cache fallback due to API failure. Cached count={Count}",
+                    fallbackTopBangumi.Count);
+                return new AnimeListResponse
+                {
+                    Success = true,
+                    DataSource = DataSource.CacheFallback,
+                    IsStale = true,
+                    Message = $"Failed to refresh Bangumi top anime, using cached snapshot: {ex.Message}",
+                    LastUpdated = fallbackTopBangumiUpdatedAt,
+                    Count = fallbackTopBangumi.Count,
+                    Animes = fallbackTopBangumi,
+                    RetryAttempts = 0
+                };
+            }
+
             return new AnimeListResponse
             {
                 Success = false, DataSource = DataSource.Api, IsStale = true,
@@ -589,6 +637,25 @@ public class AnimeAggregationService : IAnimeAggregationService
         // Set TMDB token for backdrop enrichment
         _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} trending anime from AniList with enrichment", limit);
+
+        var (cachedTopAniList, cachedTopAniListUpdatedAt) = await TryReadTopListCacheAsync(
+            TopAniListCacheSource,
+            allowStale: false);
+        if (cachedTopAniList != null && cachedTopAniList.Count > 0)
+        {
+            _logger.LogInformation("Returning AniList top list from persistent cache ({Count})", cachedTopAniList.Count);
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Database,
+                IsStale = false,
+                Message = $"Top {cachedTopAniList.Count} trending anime from AniList (cached)",
+                LastUpdated = cachedTopAniListUpdatedAt,
+                Count = cachedTopAniList.Count,
+                Animes = cachedTopAniList,
+                RetryAttempts = 0
+            };
+        }
 
         try
         {
@@ -640,6 +707,8 @@ public class AnimeAggregationService : IAnimeAggregationService
                 });
             }
 
+            await SaveTopListCacheAsync(TopAniListCacheSource, animeDtos);
+
             _logger.LogInformation("Retrieved {Count} trending anime from AniList (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
@@ -652,6 +721,28 @@ public class AnimeAggregationService : IAnimeAggregationService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to fetch trending anime from AniList");
+
+            var (fallbackTopAniList, fallbackTopAniListUpdatedAt) = await TryReadTopListCacheAsync(
+                TopAniListCacheSource,
+                allowStale: true);
+            if (fallbackTopAniList != null && fallbackTopAniList.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Using stale AniList top cache fallback due to API failure. Cached count={Count}",
+                    fallbackTopAniList.Count);
+                return new AnimeListResponse
+                {
+                    Success = true,
+                    DataSource = DataSource.CacheFallback,
+                    IsStale = true,
+                    Message = $"Failed to refresh AniList trending anime, using cached snapshot: {ex.Message}",
+                    LastUpdated = fallbackTopAniListUpdatedAt,
+                    Count = fallbackTopAniList.Count,
+                    Animes = fallbackTopAniList,
+                    RetryAttempts = 0
+                };
+            }
+
             return new AnimeListResponse
             {
                 Success = false, DataSource = DataSource.Api, IsStale = true,
@@ -670,6 +761,25 @@ public class AnimeAggregationService : IAnimeAggregationService
         // Set TMDB token for backdrop enrichment
         _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} anime from MAL via Jikan with enrichment", limit);
+
+        var (cachedTopMal, cachedTopMalUpdatedAt) = await TryReadTopListCacheAsync(
+            TopMalCacheSource,
+            allowStale: false);
+        if (cachedTopMal != null && cachedTopMal.Count > 0)
+        {
+            _logger.LogInformation("Returning MAL top list from persistent cache ({Count})", cachedTopMal.Count);
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Database,
+                IsStale = false,
+                Message = $"Top {cachedTopMal.Count} anime from MyAnimeList (cached)",
+                LastUpdated = cachedTopMalUpdatedAt,
+                Count = cachedTopMal.Count,
+                Animes = cachedTopMal,
+                RetryAttempts = 0
+            };
+        }
 
         try
         {
@@ -816,6 +926,8 @@ public class AnimeAggregationService : IAnimeAggregationService
                 }
             }
 
+            await SaveTopListCacheAsync(TopMalCacheSource, animeDtos);
+
             _logger.LogInformation("Retrieved {Count} top anime from MAL (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
@@ -828,6 +940,28 @@ public class AnimeAggregationService : IAnimeAggregationService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to fetch top anime from MAL");
+
+            var (fallbackTopMal, fallbackTopMalUpdatedAt) = await TryReadTopListCacheAsync(
+                TopMalCacheSource,
+                allowStale: true);
+            if (fallbackTopMal != null && fallbackTopMal.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Using stale MAL top cache fallback due to API failure. Cached count={Count}",
+                    fallbackTopMal.Count);
+                return new AnimeListResponse
+                {
+                    Success = true,
+                    DataSource = DataSource.CacheFallback,
+                    IsStale = true,
+                    Message = $"Failed to refresh MAL top anime, using cached snapshot: {ex.Message}",
+                    LastUpdated = fallbackTopMalUpdatedAt,
+                    Count = fallbackTopMal.Count,
+                    Animes = fallbackTopMal,
+                    RetryAttempts = 0
+                };
+            }
+
             return new AnimeListResponse
             {
                 Success = false, DataSource = DataSource.Api, IsStale = true,
@@ -1006,6 +1140,49 @@ public class AnimeAggregationService : IAnimeAggregationService
         };
 
         await _repository.SaveAnimeInfoAsync(candidate);
+    }
+
+    private async Task<(List<AnimeInfoDto>? animes, DateTime? updatedAt)> TryReadTopListCacheAsync(
+        string source,
+        bool allowStale)
+    {
+        var cache = await _repository.GetTopAnimeCacheAsync(source);
+        if (cache == null || string.IsNullOrWhiteSpace(cache.PayloadJson))
+        {
+            return (null, null);
+        }
+
+        var isStale = DateTime.UtcNow - cache.UpdatedAt > TopListCacheTtl;
+        if (isStale && !allowStale)
+        {
+            return (null, cache.UpdatedAt);
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize<List<AnimeInfoDto>>(cache.PayloadJson);
+            if (payload == null || payload.Count == 0)
+            {
+                return (null, cache.UpdatedAt);
+            }
+
+            return (payload, cache.UpdatedAt);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to deserialize top anime cache payload for source {Source}", source);
+            return (null, cache.UpdatedAt);
+        }
+    }
+
+    private async Task SaveTopListCacheAsync(string source, List<AnimeInfoDto> animes)
+    {
+        var payloadJson = JsonSerializer.Serialize(animes);
+        await _repository.SaveTopAnimeCacheAsync(new TopAnimeCacheEntity
+        {
+            Source = source,
+            PayloadJson = payloadJson
+        });
     }
 
     private static string? NullIfWhiteSpace(string? value)

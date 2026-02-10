@@ -76,6 +76,17 @@ public static class DbSchemaPatcher
 
             await ExecuteNonQueryAsync(
                 connection,
+                """
+                CREATE TABLE IF NOT EXISTS "TopAnimeCache" (
+                    "Source" TEXT NOT NULL CONSTRAINT "PK_TopAnimeCache" PRIMARY KEY,
+                    "PayloadJson" TEXT NOT NULL,
+                    "UpdatedAt" TEXT NOT NULL
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
                 "CREATE INDEX IF NOT EXISTS IX_AnimeInfo_MikanBangumiId ON AnimeInfo(MikanBangumiId);",
                 cancellationToken);
             await ExecuteNonQueryAsync(
@@ -101,6 +112,10 @@ public static class DbSchemaPatcher
             await ExecuteNonQueryAsync(
                 connection,
                 "CREATE INDEX IF NOT EXISTS IX_MikanFeedItem_PublishedAt ON MikanFeedItem(PublishedAt);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_TopAnimeCache_UpdatedAt ON TopAnimeCache(UpdatedAt);",
                 cancellationToken);
         }
         finally
