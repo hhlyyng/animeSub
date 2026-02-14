@@ -224,4 +224,19 @@ public class DownloadTorrentRequest
     /// Torrent info hash
     /// </summary>
     public string TorrentHash { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional related anime Bangumi ID (used for manual download aggregation)
+    /// </summary>
+    public int? BangumiId { get; set; }
+
+    /// <summary>
+    /// Optional related anime Mikan ID (used for manual download aggregation)
+    /// </summary>
+    public string? MikanBangumiId { get; set; }
+
+    /// <summary>
+    /// Optional related anime title (used for manual download aggregation)
+    /// </summary>
+    public string? AnimeTitle { get; set; }
 }

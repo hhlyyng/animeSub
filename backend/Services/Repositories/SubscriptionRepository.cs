@@ -25,6 +25,7 @@ public class SubscriptionRepository : ISubscriptionRepository
     public async Task<List<SubscriptionEntity>> GetAllSubscriptionsAsync()
     {
         return await _context.Subscriptions
+            .Where(s => s.BangumiId > 0)
             .OrderByDescending(s => s.CreatedAt)
             .ToListAsync();
     }
@@ -32,7 +33,7 @@ public class SubscriptionRepository : ISubscriptionRepository
     public async Task<List<SubscriptionEntity>> GetEnabledSubscriptionsAsync()
     {
         return await _context.Subscriptions
-            .Where(s => s.IsEnabled)
+            .Where(s => s.IsEnabled && s.BangumiId > 0)
             .OrderByDescending(s => s.CreatedAt)
             .ToListAsync();
     }
@@ -97,6 +98,31 @@ public class SubscriptionRepository : ISubscriptionRepository
             .Where(d => d.SubscriptionId == subscriptionId)
             .OrderByDescending(d => d.DiscoveredAt)
             .Take(limit)
+            .ToListAsync();
+    }
+
+    public async Task<List<DownloadHistoryEntity>> GetAllDownloadHistoryBySubscriptionIdAsync(int subscriptionId)
+    {
+        return await _context.DownloadHistory
+            .Where(d => d.SubscriptionId == subscriptionId)
+            .OrderByDescending(d => d.DiscoveredAt)
+            .ToListAsync();
+    }
+
+    public async Task<List<DownloadHistoryEntity>> GetManualDownloadHistoryByBangumiIdAsync(int bangumiId, int limit = 50)
+    {
+        return await _context.DownloadHistory
+            .Where(d => d.Source == DownloadSource.Manual && d.AnimeBangumiId == bangumiId)
+            .OrderByDescending(d => d.DiscoveredAt)
+            .Take(limit)
+            .ToListAsync();
+    }
+
+    public async Task<List<DownloadHistoryEntity>> GetManualDownloadsWithAnimeContextAsync()
+    {
+        return await _context.DownloadHistory
+            .Where(d => d.Source == DownloadSource.Manual && d.AnimeBangumiId.HasValue && d.AnimeBangumiId > 0)
+            .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
             .ToListAsync();
     }
 

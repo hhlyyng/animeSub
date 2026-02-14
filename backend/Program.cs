@@ -1,8 +1,11 @@
 global using System.Text.Json;
 global using System.Net.Http;
+using System.Text;
 using Serilog;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using backend.Data;
 using backend.Models.Configuration;
 using backend.Services;
@@ -12,6 +15,9 @@ using backend.Services.Repositories;
 using backend.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Runtime overrides edited from settings page
+builder.Configuration.AddJsonFile("appsettings.runtime.json", optional: true, reloadOnChange: true);
 
 // Configure Serilog with enhanced settings
 Log.Logger = new LoggerConfiguration()
@@ -112,7 +118,7 @@ builder.Services.AddSingleton<IQBittorrentService>(sp =>
 {
     var factory = sp.GetRequiredService<IHttpClientFactory>();
     var logger = sp.GetRequiredService<ILogger<backend.Services.Implementations.QBittorrentService>>();
-    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<backend.Models.Configuration.QBittorrentConfiguration>>();
+    var config = sp.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<backend.Models.Configuration.QBittorrentConfiguration>>();
     return new backend.Services.Implementations.QBittorrentService(factory.CreateClient("qbittorrent-client"), logger, config);
 });
 
@@ -155,15 +161,58 @@ builder.Services.AddScoped<ISubscriptionRepository, SubscriptionRepository>();
 builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 
     // Register background services
+    builder.Services.AddHostedService<backend.Services.Background.MikanFeedSubgroupCleanupService>();
     builder.Services.AddHostedService<backend.Services.Background.RssPollingService>();
     builder.Services.AddHostedService<backend.Services.Background.AnimePreFetchService>();
     builder.Services.AddHostedService<backend.Services.Background.DownloadProgressSyncService>();
+    builder.Services.AddHostedService<backend.Services.Background.AnimeTitleBackfillService>();
 
 // Register resilience service (Polly retry policies)
 builder.Services.AddSingleton<IResilienceService, ResilienceService>();
 
 // Register health check service
 builder.Services.AddSingleton<backend.Services.HealthCheckService>();
+
+// Register auth service
+builder.Services.AddScoped<IAuthService, AuthService>();
+
+// Configure JWT authentication
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidIssuer = "AnimeSub",
+        ValidateAudience = true,
+        ValidAudience = "AnimeSub",
+        ValidateIssuerSigningKey = true,
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.FromMinutes(5)
+    };
+
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            // Dynamically resolve the JWT secret at request time
+            var config = context.HttpContext.RequestServices.GetRequiredService<IConfiguration>();
+            var secret = config["Auth:JwtSecret"];
+            if (!string.IsNullOrWhiteSpace(secret))
+            {
+                var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
+                context.Options.TokenValidationParameters.IssuerSigningKey = key;
+            }
+            return Task.CompletedTask;
+        }
+    };
+});
+
+builder.Services.AddAuthorization();
 
 // Add memory cache
 builder.Services.AddMemoryCache();
@@ -220,6 +269,10 @@ app.UseResponseCompression();
 // 6. CORS
 app.UseCors("AllowFrontend");
 
+// 7. Authentication & Authorization
+app.UseAuthentication();
+app.UseAuthorization();
+
 // Map controllers
 app.MapControllers();
 
@@ -235,7 +288,10 @@ app.MapGet("/", (backend.Services.HealthCheckService healthCheck) =>
         {
             "GET /api/anime/today - Get today's anime schedule",
             "GET /api/subscription - Get all subscriptions",
+            "GET /api/subscription/bangumi/{bangumiId} - Get subscription by BangumiId",
             "POST /api/subscription - Create subscription",
+            "POST /api/subscription/ensure - Ensure subscription exists and enabled",
+            "POST /api/subscription/{id}/cancel - Cancel subscription (delete or keep files)",
             "POST /api/subscription/{id}/check - Manual RSS check",
             "POST /api/subscription/check-all - Check all subscriptions",
             "GET /health - Comprehensive health check",

@@ -28,7 +28,7 @@ public class QBittorrentService : IQBittorrentService
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<QBittorrentService> _logger;
-    private readonly QBittorrentConfiguration _config;
+    private readonly IOptionsMonitor<QBittorrentConfiguration> _config;
 
     private string _sessionCookie = string.Empty;
     private DateTime _sessionExpiry = DateTime.MinValue;
@@ -48,16 +48,17 @@ public class QBittorrentService : IQBittorrentService
     public QBittorrentService(
         HttpClient httpClient,
         ILogger<QBittorrentService> logger,
-        IOptions<QBittorrentConfiguration> config)
+        IOptionsMonitor<QBittorrentConfiguration> config)
     {
         _httpClient = httpClient;
         _logger = logger;
-        _config = config.Value;
+        _config = config;
 
-        _httpClient.Timeout = TimeSpan.FromSeconds(_config.TimeoutSeconds);
+        _httpClient.Timeout = TimeSpan.FromSeconds(CurrentConfig.TimeoutSeconds);
     }
 
-    private string BaseUrl => _config.GetBaseUrl();
+    private QBittorrentConfiguration CurrentConfig => _config.CurrentValue;
+    private string BaseUrl => CurrentConfig.GetBaseUrl();
 
     public async Task<bool> TestConnectionAsync()
     {
@@ -229,11 +230,11 @@ public class QBittorrentService : IQBittorrentService
 
         try
         {
-            var locationReady = await TryEnsureTorrentLocationAsync(hash, _config.DefaultSavePath);
+            var locationReady = await TryEnsureTorrentLocationAsync(hash, CurrentConfig.DefaultSavePath);
             if (!locationReady)
             {
                 throw new InvalidOperationException(
-                    $"Failed to prepare save path for torrent {hash}. Target path: {_config.DefaultSavePath}");
+                    $"Failed to prepare save path for torrent {hash}. Target path: {CurrentConfig.DefaultSavePath}");
             }
 
             var result = await SendTorrentActionAsync("/api/v2/torrents/resume", hash);
@@ -358,13 +359,13 @@ public class QBittorrentService : IQBittorrentService
             return false;
         }
 
-        var locationReady = await TryEnsureTorrentLocationAsync(normalizedHash, _config.DefaultSavePath);
+        var locationReady = await TryEnsureTorrentLocationAsync(normalizedHash, CurrentConfig.DefaultSavePath);
         if (!locationReady)
         {
             _logger.LogWarning(
                 "Torrent added but failed to apply configured save path. Hash={Hash}, TargetPath={TargetPath}, Source={Source}",
                 normalizedHash,
-                _config.DefaultSavePath,
+                CurrentConfig.DefaultSavePath,
                 source);
             return false;
         }
@@ -501,10 +502,10 @@ public class QBittorrentService : IQBittorrentService
 
     private async Task<LoginAttemptResult> SendLoginRequestAsync(string loginUrl)
     {
-        using var formData = new FormUrlEncodedContent(new[]
+            using var formData = new FormUrlEncodedContent(new[]
         {
-            new KeyValuePair<string, string>("username", _config.Username),
-            new KeyValuePair<string, string>("password", _config.Password)
+            new KeyValuePair<string, string>("username", CurrentConfig.Username),
+            new KeyValuePair<string, string>("password", CurrentConfig.Password)
         });
 
         using var response = await _httpClient.PostAsync(loginUrl, formData);
@@ -767,10 +768,10 @@ public class QBittorrentService : IQBittorrentService
     {
         var formData = new List<KeyValuePair<string, string>>();
 
-        var actualSavePath = savePath ?? _config.DefaultSavePath;
-        var actualCategory = category ?? _config.Category;
-        var actualTags = _config.Tags;
-        var actualPaused = paused ?? _config.PauseTorrentAfterAdd;
+        var actualSavePath = savePath ?? CurrentConfig.DefaultSavePath;
+        var actualCategory = category ?? CurrentConfig.Category;
+        var actualTags = CurrentConfig.Tags;
+        var actualPaused = paused ?? CurrentConfig.PauseTorrentAfterAdd;
 
         if (!string.IsNullOrEmpty(actualSavePath))
         {
@@ -810,7 +811,7 @@ public class QBittorrentService : IQBittorrentService
 
     private void ValidateCredentialPolicy()
     {
-        if (string.IsNullOrWhiteSpace(_config.Username) || string.IsNullOrWhiteSpace(_config.Password))
+        if (string.IsNullOrWhiteSpace(CurrentConfig.Username) || string.IsNullOrWhiteSpace(CurrentConfig.Password))
         {
             throw new InvalidOperationException("qBittorrent credentials are missing. Username and password are required.");
         }
@@ -839,7 +840,7 @@ public class QBittorrentService : IQBittorrentService
 
     private TimeSpan GetFailedLoginBlockDuration()
     {
-        var seconds = _config.FailedLoginBlockSeconds;
+        var seconds = CurrentConfig.FailedLoginBlockSeconds;
         if (seconds <= 0)
         {
             seconds = 300;
@@ -850,10 +851,10 @@ public class QBittorrentService : IQBittorrentService
 
     private TimeSpan GetEndpointSuspendDuration()
     {
-        var seconds = _config.OfflineSuspendSeconds;
+        var seconds = CurrentConfig.OfflineSuspendSeconds;
         if (seconds <= 0)
         {
-            seconds = Math.Max(30, _config.TimeoutSeconds);
+            seconds = Math.Max(30, CurrentConfig.TimeoutSeconds);
         }
 
         return TimeSpan.FromSeconds(seconds);
@@ -861,7 +862,7 @@ public class QBittorrentService : IQBittorrentService
 
     private string BuildCredentialKey()
     {
-        var raw = $"{BaseUrl}|{_config.Username}|{_config.Password}";
+        var raw = $"{BaseUrl}|{CurrentConfig.Username}|{CurrentConfig.Password}";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
         return Convert.ToHexString(hash);
     }
@@ -938,7 +939,7 @@ public class QBittorrentService : IQBittorrentService
     {
         if (exception is TaskCanceledException)
         {
-            return $"qBittorrent API request timed out after {_config.TimeoutSeconds} seconds.";
+            return $"qBittorrent API request timed out after {CurrentConfig.TimeoutSeconds} seconds.";
         }
 
         if (exception is HttpRequestException httpEx)

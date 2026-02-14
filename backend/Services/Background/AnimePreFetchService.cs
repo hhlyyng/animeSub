@@ -5,6 +5,7 @@ using backend.Services.Interfaces;
 using backend.Services.Repositories;
 using Microsoft.Extensions.Options;
 using backend.Models.Configuration;
+using backend.Services.Utilities;
 
 namespace backend.Services.Background;
 
@@ -159,17 +160,8 @@ public class AnimePreFetchService : BackgroundService
             var repository = scope.ServiceProvider.GetRequiredService<IAnimeRepository>();
             var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
 
-            // Token source priority:
-            // 1) PreFetch section explicit token
-            // 2) ApiTokens section shared token (development default)
-            var bangumiToken = !string.IsNullOrWhiteSpace(_config.BangumiToken)
-                ? _config.BangumiToken
-                : configuration["ApiTokens:BangumiToken"];
-            var tmdbToken = !string.IsNullOrWhiteSpace(_config.TmdbToken)
-                ? _config.TmdbToken
-                : configuration["ApiTokens:TmdbToken"];
-
-            bangumiClient.SetToken(bangumiToken ?? string.Empty);
+            // Token source: shared ApiTokens section
+            var tmdbToken = configuration["ApiTokens:TmdbToken"];
             tmdbClient.SetToken(tmdbToken);
 
             // Fetch entire week's calendar
@@ -308,9 +300,6 @@ public class AnimePreFetchService : BackgroundService
             var oriTitle = anime.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
             var chTitle = anime.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
 
-            bool containsJapanese = !string.IsNullOrEmpty(oriTitle) &&
-                System.Text.RegularExpressions.Regex.IsMatch(oriTitle, @"[\p{IsHiragana}\p{IsKatakana}]");
-
             var score = anime.TryGetProperty("rating", out var rating) &&
                         rating.TryGetProperty("score", out var scoreEl)
                         ? scoreEl.GetDouble().ToString("F1")
@@ -354,8 +343,15 @@ public class AnimePreFetchService : BackgroundService
             var anilistResult = await anilistTask;
 
             // Determine final values with fallback logic
-            var jpTitle = containsJapanese ? oriTitle : "";
             var enTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "";
+            var resolvedTitles = TitleLanguageResolver.ResolveFromName(
+                oriTitle,
+                jpTitle: null,
+                chTitle: chTitle,
+                enTitle: enTitle);
+            var jpTitle = resolvedTitles.jpTitle;
+            chTitle = resolvedTitles.chTitle;
+            enTitle = resolvedTitles.enTitle;
 
             // Check if Bangumi description is Japanese
             bool bangumiDescIsJapanese = !string.IsNullOrEmpty(chDesc) &&

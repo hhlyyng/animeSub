@@ -25,6 +25,9 @@ public static class DbSchemaPatcher
             await EnsureColumnAsync(connection, logger, "AnimeInfo", "MikanBangumiId", "TEXT NULL", cancellationToken);
 
             await EnsureColumnAsync(connection, logger, "DownloadHistory", "Source", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+            await EnsureColumnAsync(connection, logger, "DownloadHistory", "AnimeBangumiId", "INTEGER NULL", cancellationToken);
+            await EnsureColumnAsync(connection, logger, "DownloadHistory", "AnimeMikanBangumiId", "TEXT NULL", cancellationToken);
+            await EnsureColumnAsync(connection, logger, "DownloadHistory", "AnimeTitle", "TEXT NULL", cancellationToken);
             await EnsureColumnAsync(connection, logger, "DownloadHistory", "Progress", "REAL NOT NULL DEFAULT 0", cancellationToken);
             await EnsureColumnAsync(connection, logger, "DownloadHistory", "DownloadSpeed", "INTEGER NULL", cancellationToken);
             await EnsureColumnAsync(connection, logger, "DownloadHistory", "Eta", "INTEGER NULL", cancellationToken);
@@ -95,6 +98,10 @@ public static class DbSchemaPatcher
                 cancellationToken);
             await ExecuteNonQueryAsync(
                 connection,
+                "CREATE INDEX IF NOT EXISTS IX_DownloadHistory_AnimeBangumiId ON DownloadHistory(AnimeBangumiId);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
                 "CREATE INDEX IF NOT EXISTS IX_DownloadHistory_LastSyncedAt ON DownloadHistory(LastSyncedAt);",
                 cancellationToken);
             await ExecuteNonQueryAsync(
@@ -116,6 +123,23 @@ public static class DbSchemaPatcher
             await ExecuteNonQueryAsync(
                 connection,
                 "CREATE INDEX IF NOT EXISTS IX_TopAnimeCache_UpdatedAt ON TopAnimeCache(UpdatedAt);",
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                """
+                CREATE TABLE IF NOT EXISTS "Users" (
+                    "Id" INTEGER NOT NULL CONSTRAINT "PK_Users" PRIMARY KEY AUTOINCREMENT,
+                    "Username" TEXT NOT NULL,
+                    "PasswordHash" TEXT NOT NULL,
+                    "CreatedAt" TEXT NOT NULL
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS IX_Users_Username ON Users(Username);",
                 cancellationToken);
         }
         finally

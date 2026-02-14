@@ -17,6 +17,7 @@ public class AnimeDbContext : DbContext
     public DbSet<MikanFeedCacheEntity> MikanFeedCaches { get; set; }
     public DbSet<MikanFeedItemEntity> MikanFeedItems { get; set; }
     public DbSet<TopAnimeCacheEntity> TopAnimeCaches { get; set; }
+    public DbSet<UserEntity> Users { get; set; }
 
     public AnimeDbContext(DbContextOptions<AnimeDbContext> options)
         : base(options)
@@ -78,6 +79,7 @@ public class AnimeDbContext : DbContext
             entity.HasIndex(e => e.SubscriptionId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.Source);
+            entity.HasIndex(e => e.AnimeBangumiId);
             entity.HasIndex(e => e.LastSyncedAt);
         });
 
@@ -107,6 +109,13 @@ public class AnimeDbContext : DbContext
         {
             entity.HasKey(e => e.Source);
             entity.HasIndex(e => e.UpdatedAt);
+        });
+
+        // Configure User
+        modelBuilder.Entity<UserEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Username).IsUnique();
         });
     }
 }

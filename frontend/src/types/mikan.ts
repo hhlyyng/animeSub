@@ -62,6 +62,9 @@ export interface DownloadTorrentRequest {
   torrentUrl?: string;
   title: string;
   torrentHash: string;
+  bangumiId?: number;
+  mikanBangumiId?: string;
+  animeTitle?: string;
 }
 
 export interface QBTorrentInfo {

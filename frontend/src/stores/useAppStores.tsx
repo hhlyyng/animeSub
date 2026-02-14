@@ -13,11 +13,14 @@ interface DownloadPreferences {
 interface AppState {
   username: string;
   language: Language;
+  token: string | null;
   isModalOpen: boolean;
   downloadPreferences: DownloadPreferences;
   downloadLoading: boolean;
   setUsername: (name: string) => void;
   setLanguage: (lang: Language) => void;
+  setToken: (token: string | null) => void;
+  clearToken: () => void;
   setModalOpen: (open: boolean) => void;
   logout: () => void;
   setDownloadPreferences: (prefs: Partial<DownloadPreferences>) => void;
@@ -29,6 +32,7 @@ export const useAppStore = create<AppState>()(
     (set) => ({
       username: "",
       language: "zh",
+      token: null,
       isModalOpen: false,
       downloadPreferences: {
         resolution: "all",
@@ -38,8 +42,10 @@ export const useAppStore = create<AppState>()(
       downloadLoading: false,
       setUsername: (name) => set({ username: name }),
       setLanguage: (lang) => set({ language: lang }),
+      setToken: (token) => set({ token }),
+      clearToken: () => set({ token: null }),
       setModalOpen: (open) => set({ isModalOpen: open }),
-      logout: () => set({ username: "" }),
+      logout: () => set({ username: "", token: null }),
       setDownloadPreferences: (prefs) =>
         set((state) => ({
           downloadPreferences: { ...state.downloadPreferences, ...prefs },
@@ -51,6 +57,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         username: state.username,
         language: state.language,
+        token: state.token,
         downloadPreferences: state.downloadPreferences,
       }),
       onRehydrateStorage: () => (state) => {

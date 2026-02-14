@@ -109,13 +109,4 @@ public class PreFetchConfig
     /// </summary>
     public int MaxConcurrency { get; set; } = 3;
 
-    /// <summary>
-    /// Bangumi API token for pre-fetch service
-    /// </summary>
-    public string BangumiToken { get; set; } = "";
-
-    /// <summary>
-    /// TMDB API token for pre-fetch service
-    /// </summary>
-    public string TmdbToken { get; set; } = "";
 }

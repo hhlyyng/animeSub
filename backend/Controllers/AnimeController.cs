@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using backend.Models.Dtos;
 using backend.Services;
@@ -8,6 +9,7 @@ namespace backend.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class AnimeController : ControllerBase
 {
     private readonly IAnimeAggregationService _aggregationService;
@@ -37,7 +39,6 @@ public class AnimeController : ControllerBase
     /// Sample request:
     ///
     ///     GET /api/anime/today
-    ///     X-Bangumi-Token: your_bangumi_token (optional, public API)
     ///     X-TMDB-Token: your_tmdb_token (optional)
     ///
     /// </remarks>
@@ -60,22 +61,17 @@ public class AnimeController : ControllerBase
     {
         _logger.LogInformation("Received request for today's anime schedule");
 
-        // Get tokens from storage (priority) or headers (fallback for testing)
-        var bangumiToken = await _tokenStorage.GetBangumiTokenAsync()
-            ?? Request.Headers["X-Bangumi-Token"].FirstOrDefault();
+        // Get TMDB token from storage (priority) or headers (fallback for testing)
         var tmdbToken = await _tokenStorage.GetTmdbTokenAsync()
             ?? Request.Headers["X-TMDB-Token"].FirstOrDefault();
 
-        // Validate tokens (throws InvalidCredentialsException if invalid)
-        var (validatedBangumiToken, validatedTmdbToken) = _tokenValidator.ValidateRequestTokens(
-            bangumiToken,
-            tmdbToken);
+        // Validate token (throws InvalidCredentialsException if invalid)
+        _tokenValidator.ValidateTmdbToken(tmdbToken);
 
         // Get aggregated anime data with data source tracking
         // All exceptions are handled by global exception middleware
         var response = await _aggregationService.GetTodayAnimeEnrichedAsync(
-            validatedBangumiToken,
-            validatedTmdbToken,
+            tmdbToken,
             cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation(
@@ -119,7 +115,7 @@ public class AnimeController : ControllerBase
             ?? Request.Headers["X-TMDB-Token"].FirstOrDefault();
 
         var response = await _aggregationService.GetTopAnimeFromBangumiAsync(
-            null, tmdbToken, 10, cancellationToken);
+            tmdbToken, 10, cancellationToken);
 
         return Ok(new
         {

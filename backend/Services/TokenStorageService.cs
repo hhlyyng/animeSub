@@ -8,10 +8,8 @@ namespace backend.Services;
 /// </summary>
 public interface ITokenStorageService
 {
-    Task<string?> GetBangumiTokenAsync();
     Task<string?> GetTmdbTokenAsync();
-    Task SaveTokensAsync(string? bangumiToken, string? tmdbToken);
-    Task<bool> HasBangumiTokenAsync();
+    Task SaveTmdbTokenAsync(string? tmdbToken);
 }
 
 /// <summary>
@@ -44,26 +42,10 @@ public class TokenStorageService : ITokenStorageService
             _filePath);
     }
 
-    public async Task<string?> GetBangumiTokenAsync()
-    {
-        // Development priority: appsettings.json
-        var configuredToken = _configuration["ApiTokens:BangumiToken"]
-            ?? _configuration["PreFetch:BangumiToken"];
-        if (!string.IsNullOrWhiteSpace(configuredToken))
-        {
-            return configuredToken;
-        }
-
-        // Legacy fallback
-        var tokens = await ReadTokensAsync();
-        return DecryptToken(tokens?.BangumiToken);
-    }
-
     public async Task<string?> GetTmdbTokenAsync()
     {
         // Development priority: appsettings.json
-        var configuredToken = _configuration["ApiTokens:TmdbToken"]
-            ?? _configuration["PreFetch:TmdbToken"];
+        var configuredToken = _configuration["ApiTokens:TmdbToken"];
         if (!string.IsNullOrWhiteSpace(configuredToken))
         {
             return configuredToken;
@@ -74,22 +56,13 @@ public class TokenStorageService : ITokenStorageService
         return DecryptToken(tokens?.TmdbToken);
     }
 
-    public async Task<bool> HasBangumiTokenAsync()
+    public async Task SaveTmdbTokenAsync(string? tmdbToken)
     {
-        var token = await GetBangumiTokenAsync();
-        return !string.IsNullOrWhiteSpace(token);
-    }
-
-    public async Task SaveTokensAsync(string? bangumiToken, string? tmdbToken)
-    {
-        var configuredBangumiToken = _configuration["ApiTokens:BangumiToken"]
-            ?? _configuration["PreFetch:BangumiToken"];
-        var configuredTmdbToken = _configuration["ApiTokens:TmdbToken"]
-            ?? _configuration["PreFetch:TmdbToken"];
-        if (!string.IsNullOrWhiteSpace(configuredBangumiToken) || !string.IsNullOrWhiteSpace(configuredTmdbToken))
+        var configuredTmdbToken = _configuration["ApiTokens:TmdbToken"];
+        if (!string.IsNullOrWhiteSpace(configuredTmdbToken))
         {
             _logger.LogInformation(
-                "appsettings tokens are configured; legacy saved tokens are fallback only unless appsettings tokens are cleared");
+                "ApiTokens:TmdbToken is configured; legacy saved token is fallback only unless it is cleared");
         }
 
         await _lock.WaitAsync();
@@ -97,7 +70,6 @@ public class TokenStorageService : ITokenStorageService
         {
             var tokens = new UserTokens
             {
-                BangumiToken = EncryptToken(bangumiToken),
                 TmdbToken = EncryptToken(tmdbToken),
                 UpdatedAt = DateTime.UtcNow
             };
@@ -176,7 +148,6 @@ public class TokenStorageService : ITokenStorageService
 
     private class UserTokens
     {
-        public string? BangumiToken { get; set; }
         public string? TmdbToken { get; set; }
         public DateTime UpdatedAt { get; set; }
     }

@@ -45,6 +45,17 @@ public class SubscriptionService : ISubscriptionService
         return subscription == null ? null : SubscriptionResponse.FromEntity(subscription, _mikanConfig.BaseUrl);
     }
 
+    public async Task<SubscriptionResponse?> GetSubscriptionByBangumiIdAsync(int bangumiId)
+    {
+        if (bangumiId <= 0)
+        {
+            return null;
+        }
+
+        var subscription = await _repository.GetSubscriptionByBangumiIdAsync(bangumiId);
+        return subscription == null ? null : SubscriptionResponse.FromEntity(subscription, _mikanConfig.BaseUrl);
+    }
+
     public async Task<SubscriptionResponse> CreateSubscriptionAsync(CreateSubscriptionRequest request)
     {
         // Check if subscription already exists for this Bangumi ID
@@ -71,6 +82,124 @@ public class SubscriptionService : ISubscriptionService
         _logger.LogInformation("Created subscription {Id} for {Title}", created.Id, created.Title);
 
         return SubscriptionResponse.FromEntity(created, _mikanConfig.BaseUrl);
+    }
+
+    public async Task<SubscriptionResponse> EnsureSubscriptionAsync(CreateSubscriptionRequest request)
+    {
+        if (request.BangumiId <= 0)
+        {
+            throw new ArgumentException("Valid BangumiId is required", nameof(request.BangumiId));
+        }
+
+        var existing = await _repository.GetSubscriptionByBangumiIdAsync(request.BangumiId);
+        if (existing == null)
+        {
+            if (string.IsNullOrWhiteSpace(request.Title))
+            {
+                throw new ArgumentException("Title is required", nameof(request.Title));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.MikanBangumiId))
+            {
+                throw new ArgumentException("MikanBangumiId is required", nameof(request.MikanBangumiId));
+            }
+
+            return await CreateSubscriptionAsync(request);
+        }
+
+        var hasChanges = false;
+        if (!existing.IsEnabled)
+        {
+            existing.IsEnabled = true;
+            hasChanges = true;
+        }
+
+        if (string.IsNullOrWhiteSpace(existing.MikanBangumiId) && !string.IsNullOrWhiteSpace(request.MikanBangumiId))
+        {
+            existing.MikanBangumiId = request.MikanBangumiId.Trim();
+            hasChanges = true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Title) &&
+            !string.Equals(existing.Title, request.Title, StringComparison.Ordinal))
+        {
+            existing.Title = request.Title.Trim();
+            hasChanges = true;
+        }
+
+        if (hasChanges)
+        {
+            existing = await _repository.UpdateSubscriptionAsync(existing);
+        }
+
+        return SubscriptionResponse.FromEntity(existing, _mikanConfig.BaseUrl);
+    }
+
+    public async Task<CancelSubscriptionResponse?> CancelSubscriptionAsync(int subscriptionId, bool deleteFiles)
+    {
+        var subscription = await _repository.GetSubscriptionByIdAsync(subscriptionId);
+        if (subscription == null)
+        {
+            return null;
+        }
+
+        var history = await _repository.GetAllDownloadHistoryBySubscriptionIdAsync(subscriptionId);
+        var hashes = history
+            .Select(item => item.TorrentHash?.Trim().ToUpperInvariant())
+            .Where(hash => !string.IsNullOrWhiteSpace(hash))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var processedCount = 0;
+        var failedCount = 0;
+
+        foreach (var hash in hashes)
+        {
+            try
+            {
+                if (deleteFiles)
+                {
+                    var removed = await _qbService.DeleteTorrentAsync(hash!, true);
+                    if (!removed)
+                    {
+                        failedCount++;
+                        continue;
+                    }
+                }
+                else
+                {
+                    await _qbService.PauseTorrentAsync(hash!);
+                }
+
+                processedCount++;
+            }
+            catch (Exception ex)
+            {
+                failedCount++;
+                _logger.LogWarning(
+                    ex,
+                    "Failed to {Operation} torrent {Hash} while canceling subscription {SubscriptionId}",
+                    deleteFiles ? "delete" : "pause",
+                    hash,
+                    subscriptionId);
+            }
+        }
+
+        if (subscription.IsEnabled)
+        {
+            subscription.IsEnabled = false;
+            await _repository.UpdateSubscriptionAsync(subscription);
+        }
+
+        return new CancelSubscriptionResponse
+        {
+            SubscriptionId = subscriptionId,
+            IsEnabled = subscription.IsEnabled,
+            Action = deleteFiles ? CancelSubscriptionActionValues.DeleteFiles : CancelSubscriptionActionValues.KeepFiles,
+            TotalTorrents = hashes.Count,
+            ProcessedCount = processedCount,
+            FailedCount = failedCount
+        };
     }
 
     public async Task<SubscriptionResponse?> UpdateSubscriptionAsync(int id, UpdateSubscriptionRequest request)
@@ -195,6 +324,61 @@ public class SubscriptionService : ISubscriptionService
         return history.Select(DownloadHistoryResponse.FromEntity).ToList();
     }
 
+    public async Task<List<ManualDownloadAnimeResponse>> GetManualOnlyDownloadAnimesAsync(int limit = 200)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var subscriptions = await _repository.GetAllSubscriptionsAsync();
+        var subscribedBangumiIds = subscriptions
+            .Select(s => s.BangumiId)
+            .ToHashSet();
+
+        var manualDownloads = await _repository.GetManualDownloadsWithAnimeContextAsync();
+
+        var grouped = manualDownloads
+            .Where(d => d.AnimeBangumiId.HasValue && d.AnimeBangumiId.Value > 0)
+            .Where(d => !subscribedBangumiIds.Contains(d.AnimeBangumiId!.Value))
+            .GroupBy(d => d.AnimeBangumiId!.Value)
+            .Select(group =>
+            {
+                var latest = group
+                    .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
+                    .First();
+
+                var title = ResolveManualAnimeTitle(group, latest);
+                var mikanBangumiId = group
+                    .Select(d => d.AnimeMikanBangumiId)
+                    .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+                var lastTaskAt = group
+                    .Max(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt);
+
+                return new ManualDownloadAnimeResponse
+                {
+                    BangumiId = group.Key,
+                    Title = title,
+                    MikanBangumiId = mikanBangumiId,
+                    TaskCount = group.Count(),
+                    LastTaskAt = lastTaskAt
+                };
+            })
+            .OrderByDescending(item => item.LastTaskAt)
+            .Take(safeLimit)
+            .ToList();
+
+        return grouped;
+    }
+
+    public async Task<List<DownloadHistoryResponse>> GetManualDownloadHistoryAsync(int bangumiId, int limit = 50)
+    {
+        if (bangumiId <= 0)
+        {
+            return new List<DownloadHistoryResponse>();
+        }
+
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var history = await _repository.GetManualDownloadHistoryByBangumiIdAsync(bangumiId, safeLimit);
+        return history.Select(DownloadHistoryResponse.FromEntity).ToList();
+    }
+
     public List<MikanRssItem> FilterRssItems(List<MikanRssItem> items, string? keywordInclude, string? keywordExclude)
     {
         var includeKeywords = ParseKeywords(keywordInclude);
@@ -287,6 +471,9 @@ public class SubscriptionService : ISubscriptionService
                         TorrentUrl = item.TorrentUrl,
                         TorrentHash = item.TorrentHash,
                         Title = item.Title,
+                        AnimeBangumiId = subscription.BangumiId,
+                        AnimeMikanBangumiId = subscription.MikanBangumiId,
+                        AnimeTitle = subscription.Title,
                         FileSize = item.FileSize,
                         PublishedAt = item.PublishedAt,
                         Status = DownloadStatus.Pending,
@@ -362,6 +549,32 @@ public class SubscriptionService : ISubscriptionService
             .Select(k => k.Trim())
             .Where(k => !string.IsNullOrEmpty(k))
             .ToList();
+    }
+
+    private static string ResolveManualAnimeTitle(
+        IGrouping<int, DownloadHistoryEntity> group,
+        DownloadHistoryEntity latest)
+    {
+        if (!string.IsNullOrWhiteSpace(latest.AnimeTitle))
+        {
+            return latest.AnimeTitle.Trim();
+        }
+
+        var fallback = group
+            .Select(item => item.AnimeTitle)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+        if (!string.IsNullOrWhiteSpace(fallback))
+        {
+            return fallback.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(latest.Title))
+        {
+            return latest.Title.Trim();
+        }
+
+        return $"Bangumi {group.Key}";
     }
 
     #endregion

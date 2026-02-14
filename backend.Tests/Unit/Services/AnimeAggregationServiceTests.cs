@@ -149,7 +149,7 @@ public class AnimeAggregationServiceTests
             .ReturnsAsync(TestDataFactory.CreateAniListAnimeInfo());
 
         // Act
-        var result = await _sut.GetTodayAnimeEnrichedAsync("test-token", "tmdb-token");
+        var result = await _sut.GetTodayAnimeEnrichedAsync("tmdb-token");
 
         // Assert
         result.Success.Should().BeTrue();
@@ -234,7 +234,7 @@ public class AnimeAggregationServiceTests
             .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
 
         // Act - should not throw even with null token
-        var result = await _sut.GetTodayAnimeEnrichedAsync(null, null);
+        var result = await _sut.GetTodayAnimeEnrichedAsync(null);
 
         // Assert
         Assert.NotNull(result);
@@ -258,10 +258,9 @@ public class AnimeAggregationServiceTests
             .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
 
         // Act
-        await _sut.GetTodayAnimeEnrichedAsync("bangumi-token", "tmdb-token");
+        await _sut.GetTodayAnimeEnrichedAsync("tmdb-token");
 
         // Assert
-        _bangumiClientMock.Verify(b => b.SetToken("bangumi-token"), Times.Once);
         _tmdbClientMock.Verify(t => t.SetToken("tmdb-token"), Times.Once);
     }
 

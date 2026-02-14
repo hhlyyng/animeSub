@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +20,7 @@ namespace backend.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class MikanController : ControllerBase
 {
     private readonly IMikanClient _mikanClient;
@@ -258,16 +260,50 @@ public class MikanController : ControllerBase
         var torrentInput = !string.IsNullOrWhiteSpace(request.MagnetLink)
             ? request.MagnetLink
             : request.TorrentUrl!;
+        int? animeBangumiId = request.BangumiId.HasValue && request.BangumiId.Value > 0
+            ? request.BangumiId.Value
+            : null;
+        var animeMikanBangumiId = string.IsNullOrWhiteSpace(request.MikanBangumiId)
+            ? null
+            : request.MikanBangumiId.Trim();
+        var animeTitle = string.IsNullOrWhiteSpace(request.AnimeTitle)
+            ? request.Title
+            : request.AnimeTitle.Trim();
 
         using var scope = _serviceProvider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
 
         var existingDownload = await db.DownloadHistory
-            .AsNoTracking()
             .FirstOrDefaultAsync(d => d.TorrentHash == normalizedHash);
 
         if (existingDownload != null)
         {
+            var shouldUpdateExisting = false;
+            if (!existingDownload.AnimeBangumiId.HasValue && animeBangumiId.HasValue)
+            {
+                existingDownload.AnimeBangumiId = animeBangumiId.Value;
+                shouldUpdateExisting = true;
+            }
+
+            if (string.IsNullOrWhiteSpace(existingDownload.AnimeMikanBangumiId) &&
+                !string.IsNullOrWhiteSpace(animeMikanBangumiId))
+            {
+                existingDownload.AnimeMikanBangumiId = animeMikanBangumiId;
+                shouldUpdateExisting = true;
+            }
+
+            if (string.IsNullOrWhiteSpace(existingDownload.AnimeTitle) &&
+                !string.IsNullOrWhiteSpace(animeTitle))
+            {
+                existingDownload.AnimeTitle = animeTitle;
+                shouldUpdateExisting = true;
+            }
+
+            if (shouldUpdateExisting)
+            {
+                await db.SaveChangesAsync();
+            }
+
             return Ok(new
             {
                 message = "Download already exists",
@@ -312,6 +348,9 @@ public class MikanController : ControllerBase
             Title = request.Title,
             Status = DownloadStatus.Pending,
             Source = DownloadSource.Manual,
+            AnimeBangumiId = animeBangumiId,
+            AnimeMikanBangumiId = animeMikanBangumiId,
+            AnimeTitle = animeTitle,
             PublishedAt = DateTime.UtcNow,
             DiscoveredAt = DateTime.UtcNow,
             DownloadedAt = DateTime.UtcNow,
@@ -342,12 +381,21 @@ public class MikanController : ControllerBase
                 .GroupBy(t => NormalizeHash(t.Hash))
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-            var torrents = await db.DownloadHistory
-                .Where(d => d.Source == DownloadSource.Manual)
-                .OrderByDescending(d => d.DownloadedAt ?? d.DiscoveredAt)
+            // Return all download sources (manual + subscription), deduplicated by normalized hash.
+            var historyCandidates = await db.DownloadHistory
+                .Where(d => !string.IsNullOrWhiteSpace(d.TorrentHash))
+                .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
                 .ToListAsync();
 
-            var response = torrents.Select(d =>
+            var latestByHash = historyCandidates
+                .GroupBy(d => NormalizeHash(d.TorrentHash), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
+                    .First())
+                .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
+                .ToList();
+
+            var response = latestByHash.Select(d =>
             {
                 var normalizedHash = NormalizeHash(d.TorrentHash);
                 var hasRealtime = qbByHash.TryGetValue(normalizedHash, out var qbTorrent);
@@ -370,7 +418,8 @@ public class MikanController : ControllerBase
                     downloadSpeed,
                     eta,
                     numSeeds,
-                    numLeechers
+                    numLeechers,
+                    source = d.Source.ToString().ToLowerInvariant()
                 };
             }).ToList();
 

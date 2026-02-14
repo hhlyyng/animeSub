@@ -6,8 +6,13 @@ import type { AnimeInfo } from "../../../types/anime";
 import { useAppStore } from "../../../stores/useAppStores";
 import type { MikanSeasonInfo, ParsedRssItem, TorrentInfo } from "../../../types/mikan";
 import * as mikanApi from "../../../services/mikanApi";
+import * as subscriptionApi from "../../../services/subscriptionApi";
+import * as settingsApi from "../../../services/settingsApi";
+import type { DownloadPreferenceField } from "../../../types/settings";
 import { StarIcon } from "../../../components/icons/StarIcon";
 import { CloseIcon } from "../../../components/icons/CloseIcon";
+import { BellIcon } from "../../../components/icons/BellIcon";
+import { CheckIcon } from "../../../components/icons/CheckIcon";
 import { ExternalLinkIcon } from "../../../components/icons/ExternalLinkIcon";
 import { DownloadEpisodeGroup } from "./DownloadEpisodeGroup";
 import type { DownloadActionState } from "./DownloadActionButton";
@@ -32,12 +37,35 @@ type PendingStateOverride = {
 };
 
 type DownloadTaskFilter = "all" | "downloading" | "completed";
+type SubscriptionPreferenceState = {
+  subgroup: string;
+  resolution: string;
+  subtitleType: string;
+  priorityOrder: DownloadPreferenceField[];
+};
 type ConfirmDialogAction =
   | { type: "download"; item: ParsedRssItem }
-  | { type: "remove"; hash: string; title: string };
+  | { type: "remove"; hash: string; title: string }
+  | {
+      type: "subscribe";
+      title: string;
+      subgroup: string;
+      resolution: string;
+      subtitleType: string;
+      bestMatchHint?: string;
+    }
+  | { type: "unsubscribe" };
+
+type CancelSubscriptionAction = "delete_files" | "keep_files";
 
 const ACTION_OVERRIDE_TTL_MS = 8000;
 const NO_SUBTITLE_FILTER_VALUE = "__NO_SUBTITLE__";
+const DEFAULT_SUBSCRIPTION_PREFERENCE: SubscriptionPreferenceState = {
+  subgroup: "all",
+  resolution: "1080P",
+  subtitleType: "\u7b80\u65e5\u5185\u5d4c",
+  priorityOrder: ["subgroup", "resolution", "subtitleType"],
+};
 
 function getEpisodeGroupKey(group: EpisodeGroup): string {
   if (group.type === "collection") return "ep-collection";
@@ -148,6 +176,86 @@ function normalizeSubtitleFilterValue(value: string | null | undefined): string 
   return normalized.length > 0 ? normalized : NO_SUBTITLE_FILTER_VALUE;
 }
 
+function resolvePreferenceDisplayValue(
+  value: string,
+  noPreferenceLabel: string,
+  noSubtitleLabel: string
+): string {
+  if (!value || value === "all") {
+    return noPreferenceLabel;
+  }
+  if (value === NO_SUBTITLE_FILTER_VALUE) {
+    return noSubtitleLabel;
+  }
+  return value;
+}
+
+function normalizePreferenceCompareValue(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function resolveItemPreferenceValue(item: ParsedRssItem, field: DownloadPreferenceField): string {
+  if (field === "subgroup") {
+    return (item.subgroup ?? "").trim();
+  }
+  if (field === "resolution") {
+    return (item.resolution ?? "").trim();
+  }
+  return normalizeSubtitleFilterValue(item.subtitleType);
+}
+
+function isPreferenceMatched(
+  item: ParsedRssItem,
+  preferences: SubscriptionPreferenceState,
+  field: DownloadPreferenceField
+): boolean {
+  const preferred = normalizePreferenceCompareValue(preferences[field]);
+  if (!preferred || preferred === "all") {
+    return true;
+  }
+
+  const actual = normalizePreferenceCompareValue(resolveItemPreferenceValue(item, field));
+  return actual === preferred;
+}
+
+function findBestPreferenceMatch(
+  items: ParsedRssItem[],
+  preferences: SubscriptionPreferenceState
+): ParsedRssItem | null {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const order = preferences.priorityOrder.length > 0 ? preferences.priorityOrder : DEFAULT_SUBSCRIPTION_PREFERENCE.priorityOrder;
+  const scored = items
+    .map((item) => {
+      let score = 0;
+      let matchedCount = 0;
+
+      order.forEach((field, index) => {
+        const preferred = normalizePreferenceCompareValue(preferences[field]);
+        if (!preferred || preferred === "all") {
+          return;
+        }
+        if (isPreferenceMatched(item, preferences, field)) {
+          score += (order.length - index) * 100;
+          matchedCount += 1;
+        }
+      });
+
+      return {
+        item,
+        score,
+        matchedCount,
+        publishedAt: Date.parse(item.publishedAt) || 0,
+      };
+    })
+    .filter((entry) => entry.matchedCount > 0)
+    .sort((a, b) => b.score - a.score || b.matchedCount - a.matchedCount || b.publishedAt - a.publishedAt);
+
+  return scored[0]?.item ?? null;
+}
+
 function pickSeasonByNumber(seasons: MikanSeasonInfo[], expected: number): MikanSeasonInfo[] {
   const matched = seasons.filter((season) => {
     if (typeof season.seasonNumber === "number") {
@@ -223,6 +331,12 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const [stateOverrides, setStateOverrides] = useState<Map<string, PendingStateOverride>>(new Map());
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogAction | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [currentSubscriptionId, setCurrentSubscriptionId] = useState<number | null>(null);
+  const [isSubscribeBusy, setIsSubscribeBusy] = useState(false);
+  const [subscriptionPreference, setSubscriptionPreference] = useState<SubscriptionPreferenceState>(
+    DEFAULT_SUBSCRIPTION_PREFERENCE
+  );
   const stopPollingRef = useRef<(() => void) | null>(null);
   const latestFeedRequestIdRef = useRef(0);
 
@@ -266,10 +380,44 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const subtitleLabel = language === "zh" ? "\u5b57\u5e55" : "Subtitle";
   const noSubtitleLabel = language === "zh" ? "\u65e0\u5b57\u5e55" : "No subtitle";
   const allLabel = language === "zh" ? "\u5168\u90e8" : "All";
+  const noPreferenceLabel = language === "zh" ? "\u4e0d\u9650" : "Any";
   const cancelLabel = language === "zh" ? "\u53d6\u6d88" : "Cancel";
   const confirmActionLabel = language === "zh" ? "\u786e\u8ba4" : "Confirm";
   const confirmDownloadTitle = language === "zh" ? "\u786e\u8ba4\u63a8\u9001\u4e0b\u8f7d\u4efb\u52a1" : "Confirm download task";
   const confirmRemoveTitle = language === "zh" ? "\u786e\u8ba4\u5220\u9664\u4e0b\u8f7d\u4efb\u52a1" : "Confirm remove task";
+  const confirmSubscribeTitle = language === "zh" ? "\u786e\u8ba4\u8ba2\u9605" : "Confirm subscription";
+  const confirmUnsubscribeTitle = language === "zh" ? "\u786e\u8ba4\u53d6\u6d88\u8ba2\u9605" : "Confirm unsubscribe";
+  const subscribeLabel = language === "zh" ? "\u8ba2\u9605" : "Subscribe";
+  const unsubscribeLabel = language === "zh" ? "\u53d6\u6d88\u8ba2\u9605" : "Unsubscribe";
+  const cancelAndDeleteLabel = language === "zh" ? "\u53d6\u8ba2\u5e76\u5220\u9664\u6587\u4ef6" : "Unsubscribe + Delete";
+  const cancelAndKeepLabel = language === "zh" ? "\u53d6\u8ba2\u4f46\u4fdd\u7559\u6587\u4ef6" : "Unsubscribe + Keep";
+  const rollbackLabel = language === "zh" ? "\u56de\u9000" : "Back";
+  const subscribeExpandWidthClass = language === "zh" ? "group-hover/subscribe:w-20" : "group-hover/subscribe:w-24";
+  const subscribeTextExpandClass = language === "zh" ? "group-hover/subscribe:max-w-12" : "group-hover/subscribe:max-w-16";
+
+  const subscribeMikanBangumiId = useMemo(() => {
+    return (
+      anime.mikan_bangumi_id?.trim() ||
+      seasons[selectedSeasonIndex]?.mikanBangumiId?.trim() ||
+      seasons[0]?.mikanBangumiId?.trim() ||
+      ""
+    );
+  }, [anime.mikan_bangumi_id, seasons, selectedSeasonIndex]);
+
+  const subscribePreferencePreview = useMemo(
+    () => ({
+      subgroup: resolvePreferenceDisplayValue(subscriptionPreference.subgroup, noPreferenceLabel, noSubtitleLabel),
+      resolution: resolvePreferenceDisplayValue(subscriptionPreference.resolution, noPreferenceLabel, noSubtitleLabel),
+      subtitleType: resolvePreferenceDisplayValue(subscriptionPreference.subtitleType, noPreferenceLabel, noSubtitleLabel),
+    }),
+    [
+      noPreferenceLabel,
+      noSubtitleLabel,
+      subscriptionPreference.resolution,
+      subscriptionPreference.subgroup,
+      subscriptionPreference.subtitleType,
+    ]
+  );
 
   const loadSeasons = useCallback(async () => {
     let shouldKeepLoadingForFeed = false;
@@ -603,6 +751,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
       try {
         const requestHash = item.torrentHash?.trim().toUpperCase() ?? "";
+        const parsedBangumiId = Number.parseInt(anime.bangumi_id, 10);
         if (requestHash.length > 0) {
           setBusyHash(requestHash);
         }
@@ -613,6 +762,9 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
           torrentUrl: item.torrentUrl,
           title: item.title,
           torrentHash: requestHash,
+          bangumiId: Number.isFinite(parsedBangumiId) && parsedBangumiId > 0 ? parsedBangumiId : undefined,
+          mikanBangumiId: anime.mikan_bangumi_id,
+          animeTitle: anime.ch_title || anime.en_title || anime.jp_title,
         });
         const effectiveHash = qbHash.trim().toUpperCase();
         if (effectiveHash.length === 0) {
@@ -733,31 +885,6 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     setConfirmDialog({ type: "remove", hash: normalizedHash, title });
   }, []);
 
-  const closeConfirmDialog = useCallback(() => {
-    if (confirmBusy) {
-      return;
-    }
-    setConfirmDialog(null);
-  }, [confirmBusy]);
-
-  const confirmDialogAction = useCallback(async () => {
-    if (!confirmDialog || confirmBusy) {
-      return;
-    }
-
-    setConfirmBusy(true);
-    try {
-      if (confirmDialog.type === "download") {
-        await executeDownload(confirmDialog.item);
-      } else {
-        await executeRemove(confirmDialog.hash);
-      }
-      setConfirmDialog(null);
-    } finally {
-      setConfirmBusy(false);
-    }
-  }, [confirmBusy, confirmDialog, executeDownload, executeRemove]);
-
   const handleSeasonChange = (event: ChangeEvent<HTMLSelectElement>) => {
     setSelectedSeasonIndex(Number.parseInt(event.target.value, 10));
   };
@@ -766,10 +893,206 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     setDownloadPreferences({ [key]: value });
   };
 
-  useEffect(() => {
-    if (open && anime.jp_title) {
-      void loadSeasons();
+  const executeSubscribe = useCallback(async () => {
+    const bangumiId = Number.parseInt(anime.bangumi_id, 10);
+    if (!Number.isFinite(bangumiId) || bangumiId <= 0) {
+      toast.error(language === "zh" ? "\u7f3a\u5c11\u6709\u6548 BangumiId\uff0c\u65e0\u6cd5\u8ba2\u9605" : "Missing valid BangumiId");
+      return;
     }
+
+    if (!subscribeMikanBangumiId) {
+      toast.error(language === "zh" ? "\u7f3a\u5c11 Mikan ID\uff0c\u65e0\u6cd5\u8ba2\u9605" : "Missing Mikan ID");
+      return;
+    }
+
+    if (isSubscribeBusy) {
+      return;
+    }
+
+    try {
+      setIsSubscribeBusy(true);
+      const ensured = await subscriptionApi.ensureSubscription({
+        bangumiId,
+        title: anime.ch_title || anime.en_title || anime.jp_title || "Unknown Title",
+        mikanBangumiId: subscribeMikanBangumiId,
+      });
+
+      setIsSubscribed(Boolean(ensured.isEnabled));
+      setCurrentSubscriptionId(ensured.id);
+      toast.success(language === "zh" ? "\u8ba2\u9605\u6210\u529f" : "Subscribed");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to subscribe";
+      toast.error(language === "zh" ? `\u8ba2\u9605\u5931\u8d25: ${message}` : `Subscribe failed: ${message}`);
+    } finally {
+      setIsSubscribeBusy(false);
+    }
+  }, [
+    anime.bangumi_id,
+    anime.ch_title,
+    anime.en_title,
+    anime.jp_title,
+    isSubscribeBusy,
+    language,
+    subscribeMikanBangumiId,
+  ]);
+
+  const executeUnsubscribe = useCallback(async (action: CancelSubscriptionAction) => {
+    if (isSubscribeBusy) {
+      return;
+    }
+
+    if (!currentSubscriptionId || currentSubscriptionId <= 0) {
+      toast.error(language === "zh" ? "\u8ba2\u9605\u8bb0\u5f55\u7f3a\u5931\uff0c\u65e0\u6cd5\u53d6\u6d88" : "Subscription record is missing");
+      return;
+    }
+
+    try {
+      setIsSubscribeBusy(true);
+      const updated = await subscriptionApi.cancelSubscription(currentSubscriptionId, action);
+      setIsSubscribed(Boolean(updated.isEnabled));
+      setCurrentSubscriptionId(updated.subscriptionId);
+      toast.success(language === "zh" ? "\u5df2\u53d6\u6d88\u8ba2\u9605" : "Subscription canceled");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to cancel subscription";
+      toast.error(language === "zh" ? `\u53d6\u6d88\u8ba2\u9605\u5931\u8d25: ${message}` : `Unsubscribe failed: ${message}`);
+    } finally {
+      setIsSubscribeBusy(false);
+    }
+  }, [currentSubscriptionId, isSubscribeBusy, language]);
+
+  const handleSubscriptionButtonClick = useCallback(() => {
+    if (isSubscribeBusy) {
+      return;
+    }
+
+    if (isSubscribed) {
+      setConfirmDialog({ type: "unsubscribe" });
+      return;
+    }
+
+    const bangumiId = Number.parseInt(anime.bangumi_id, 10);
+    if (!Number.isFinite(bangumiId) || bangumiId <= 0) {
+      toast.error(language === "zh" ? "\u7f3a\u5c11\u6709\u6548 BangumiId\uff0c\u65e0\u6cd5\u8ba2\u9605" : "Missing valid BangumiId");
+      return;
+    }
+
+    if (!subscribeMikanBangumiId) {
+      toast.error(language === "zh" ? "\u7f3a\u5c11 Mikan ID\uff0c\u65e0\u6cd5\u8ba2\u9605" : "Missing Mikan ID");
+      return;
+    }
+
+    const priorityOrder =
+      subscriptionPreference.priorityOrder.length > 0
+        ? subscriptionPreference.priorityOrder
+        : DEFAULT_SUBSCRIPTION_PREFERENCE.priorityOrder;
+
+    const hasActivePreferences = priorityOrder.some((field) => {
+      const value = normalizePreferenceCompareValue(subscriptionPreference[field]);
+      return value.length > 0 && value !== "all";
+    });
+
+    const hasExactMatch =
+      !hasActivePreferences ||
+      feedItems.some((item) => priorityOrder.every((field) => isPreferenceMatched(item, subscriptionPreference, field)));
+
+    let bestMatchHint: string | undefined;
+    if (hasActivePreferences && !hasExactMatch) {
+      const bestMatch = findBestPreferenceMatch(feedItems, subscriptionPreference);
+      if (bestMatch) {
+        const subgroupText = resolvePreferenceDisplayValue(
+          bestMatch.subgroup?.trim() || "all",
+          noPreferenceLabel,
+          noSubtitleLabel
+        );
+        const resolutionText = resolvePreferenceDisplayValue(
+          bestMatch.resolution?.trim() || "all",
+          noPreferenceLabel,
+          noSubtitleLabel
+        );
+        const subtitleText = resolvePreferenceDisplayValue(
+          normalizeSubtitleFilterValue(bestMatch.subtitleType),
+          noPreferenceLabel,
+          noSubtitleLabel
+        );
+        bestMatchHint =
+          language === "zh"
+            ? `当前最接近偏好的片源：${subgroupText} / ${resolutionText} / ${subtitleText}`
+            : `Closest available source: ${subgroupText} / ${resolutionText} / ${subtitleText}`;
+      }
+    }
+
+    setConfirmDialog({
+      type: "subscribe",
+      title: anime.ch_title || anime.en_title || anime.jp_title || "Unknown Title",
+      subgroup: subscribePreferencePreview.subgroup,
+      resolution: subscribePreferencePreview.resolution,
+      subtitleType: subscribePreferencePreview.subtitleType,
+      bestMatchHint,
+    });
+  }, [
+    anime.bangumi_id,
+    anime.ch_title,
+    anime.en_title,
+    anime.jp_title,
+    isSubscribed,
+    isSubscribeBusy,
+    language,
+    feedItems,
+    noPreferenceLabel,
+    noSubtitleLabel,
+    subscriptionPreference,
+    subscribeMikanBangumiId,
+    subscribePreferencePreview.resolution,
+    subscribePreferencePreview.subgroup,
+    subscribePreferencePreview.subtitleType,
+  ]);
+
+  const closeConfirmDialog = useCallback(() => {
+    if (confirmBusy) {
+      return;
+    }
+    setConfirmDialog(null);
+  }, [confirmBusy]);
+
+  const confirmDialogAction = useCallback(async () => {
+    if (!confirmDialog || confirmBusy || confirmDialog.type === "unsubscribe") {
+      return;
+    }
+
+    setConfirmBusy(true);
+    try {
+      if (confirmDialog.type === "download") {
+        await executeDownload(confirmDialog.item);
+      } else if (confirmDialog.type === "remove") {
+        await executeRemove(confirmDialog.hash);
+      } else {
+        await executeSubscribe();
+      }
+      setConfirmDialog(null);
+    } finally {
+      setConfirmBusy(false);
+    }
+  }, [confirmBusy, confirmDialog, executeDownload, executeRemove, executeSubscribe]);
+
+  const confirmUnsubscribeAction = useCallback(async (action: CancelSubscriptionAction) => {
+    if (!confirmDialog || confirmDialog.type !== "unsubscribe" || confirmBusy) {
+      return;
+    }
+
+    setConfirmBusy(true);
+    try {
+      await executeUnsubscribe(action);
+      setConfirmDialog(null);
+    } finally {
+      setConfirmBusy(false);
+    }
+  }, [confirmBusy, confirmDialog, executeUnsubscribe]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    void loadSeasons();
   }, [open, anime, loadSeasons]);
 
   useEffect(() => {
@@ -782,8 +1105,97 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     if (!open) {
       setConfirmDialog(null);
       setConfirmBusy(false);
+      setIsSubscribed(false);
+      setCurrentSubscriptionId(null);
+      setIsSubscribeBusy(false);
+      setSubscriptionPreference(DEFAULT_SUBSCRIPTION_PREFERENCE);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let cancelled = false;
+    void settingsApi
+      .getSettingsProfile()
+      .then((settingsProfile) => {
+        if (cancelled) {
+          return;
+        }
+
+        const incomingOrder = settingsProfile.downloadPreferences.priorityOrder;
+        const normalizedOrder =
+          incomingOrder.length === 3 &&
+          DEFAULT_SUBSCRIPTION_PREFERENCE.priorityOrder.every((field) => incomingOrder.includes(field))
+            ? incomingOrder
+            : DEFAULT_SUBSCRIPTION_PREFERENCE.priorityOrder;
+
+        setSubscriptionPreference({
+          subgroup: settingsProfile.downloadPreferences.subgroup || DEFAULT_SUBSCRIPTION_PREFERENCE.subgroup,
+          resolution: settingsProfile.downloadPreferences.resolution || DEFAULT_SUBSCRIPTION_PREFERENCE.resolution,
+          subtitleType: settingsProfile.downloadPreferences.subtitleType || DEFAULT_SUBSCRIPTION_PREFERENCE.subtitleType,
+          priorityOrder: normalizedOrder,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSubscriptionPreference(DEFAULT_SUBSCRIPTION_PREFERENCE);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const bangumiId = Number.parseInt(anime.bangumi_id, 10);
+    if (!Number.isFinite(bangumiId) || bangumiId <= 0) {
+      setIsSubscribed(false);
+      setCurrentSubscriptionId(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsSubscribeBusy(true);
+
+    void subscriptionApi
+      .getSubscriptionByBangumiId(bangumiId)
+      .then((subscription) => {
+        if (cancelled) {
+          return;
+        }
+        if (!subscription) {
+          setIsSubscribed(false);
+          setCurrentSubscriptionId(null);
+          return;
+        }
+        setIsSubscribed(Boolean(subscription.isEnabled));
+        setCurrentSubscriptionId(subscription.id);
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setIsSubscribed(false);
+        setCurrentSubscriptionId(null);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsSubscribeBusy(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, anime.bangumi_id]);
 
   useEffect(() => {
     return () => {
@@ -820,7 +1232,11 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     ? ""
     : confirmDialog.type === "download"
       ? confirmDownloadTitle
-      : confirmRemoveTitle;
+      : confirmDialog.type === "remove"
+        ? confirmRemoveTitle
+        : confirmDialog.type === "subscribe"
+          ? confirmSubscribeTitle
+          : confirmUnsubscribeTitle;
   const confirmDialogMessage = !confirmDialog
     ? ""
     : confirmDialog.type === "download"
@@ -829,30 +1245,75 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
           ? `\u786e\u8ba4\u540eqBittorrent\u5c06\u4f1a\u7acb\u5373\u5f00\u59cb\u300c${confirmDialog.item.title}\u300d\u3002`
           : `Confirm to start "${confirmDialog.item.title}" in qBittorrent immediately.`
       )
-      : (
+      : confirmDialog.type === "remove"
+        ? (
         language === "zh"
           ? `\u786e\u8ba4\u540eqBittorrent\u5c06\u4f1a\u7acb\u5373\u5220\u9664\u300c${confirmDialog.title}\u300d\u4efb\u52a1\uff08\u5305\u62ec\u6587\u4ef6\uff09\u3002`
           : `Confirm to delete "${confirmDialog.title}" from qBittorrent immediately (including files).`
+      )
+        : confirmDialog.type === "subscribe"
+          ? (
+            language === "zh"
+              ? `\u786e\u8ba4\u8ba2\u9605${confirmDialog.title}\uff1f\u8ba2\u9605\u540e\u5c06\u6309\u7167\u60a8\u5728\u8bbe\u7f6e\u4e2d\u7684\u9884\u8bbe\u7247\u6e90\u504f\u597d\u8fdb\u884c\u4e0b\u8f7d\u3002\u5f53\u524d\u504f\u597d\u4e3a\uff1a${confirmDialog.subgroup}\uff0c${confirmDialog.resolution}\uff0c${confirmDialog.subtitleType}\u3002\u82e5\u65e0\u6700\u4f73\u5339\u914d\uff0c\u5219\u6309\u504f\u597d\u987a\u5e8f\u8fdb\u884c\u5339\u914d\u4e0b\u8f7d\u3002\u8fd9\u4e9b\u529f\u80fd\u76ee\u524d\u4ecd\u5728\u5b8c\u5584\u4e2d\uff0c\u540e\u7eed\u4f1a\u5728\u8bbe\u7f6e\u9875\u63d0\u4f9b\u5b8c\u6574\u914d\u7f6e\u3002${confirmDialog.bestMatchHint ? `\n${confirmDialog.bestMatchHint}` : ""}`
+              : `Confirm subscription for "${confirmDialog.title}"? Downloads will follow your preset source preferences in Settings. Current preference: ${confirmDialog.subgroup}, ${confirmDialog.resolution}, ${confirmDialog.subtitleType}. If no best match is found, fallback matching will follow your preference order. This flow is still being completed and will be fully configurable in Settings.${confirmDialog.bestMatchHint ? `\n${confirmDialog.bestMatchHint}` : ""}`
+          )
+          : (
+            language === "zh"
+              ? "\u786e\u8ba4\u53d6\u6d88\u8ba2\u9605\u5417\uff1f\u60a8\u5e0c\u671b\u5982\u4f55\u5904\u7406\u5df2\u4e0b\u8f7d\u7684\u52a8\u6f2b\u6587\u4ef6\uff1f"
+              : "Confirm unsubscribe? How would you like to handle downloaded anime files?"
       );
+  const isUnsubscribeDialog = confirmDialog?.type === "unsubscribe";
+  const subscribeButtonLabel = isSubscribed ? unsubscribeLabel : subscribeLabel;
 
   const modalContent = (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50" />
 
-      <div
-        className="relative z-10 w-full max-w-3xl bg-white rounded-lg shadow-2xl overflow-hidden animate-fadeIn"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="absolute flex items-center gap-3" style={{ top: "1rem", right: "1rem", zIndex: 20 }}>
-          <div className="flex-shrink-0 inline-flex items-center px-2.5 py-0.5 bg-yellow-100 rounded-full">
+        <div
+          className="relative z-10 w-full max-w-3xl bg-white rounded-lg shadow-2xl overflow-hidden animate-fadeIn"
+          onClick={(event) => event.stopPropagation()}
+        >
+        <div className="absolute flex items-center gap-1" style={{ top: "1rem", right: "1rem", zIndex: 20 }}>
+          <div className="flex-shrink-0 inline-flex items-center px-2 py-0.5 bg-yellow-100 rounded-full">
             <StarIcon />
             <span className="text-sm font-semibold text-gray-900">{anime.score || "N/A"}</span>
           </div>
 
           <button
+            type="button"
+            onClick={handleSubscriptionButtonClick}
+            className="group group/subscribe"
+            style={{ all: "unset", padding: "0", cursor: isSubscribeBusy || confirmBusy ? "not-allowed" : "pointer" }}
+            aria-label={subscribeButtonLabel}
+            title={subscribeButtonLabel}
+            disabled={isSubscribeBusy || confirmBusy}
+          >
+            <span
+              className={`relative inline-flex h-8 w-8 items-center justify-center gap-0 overflow-hidden rounded-md bg-transparent text-gray-600 transition-all duration-200 ${subscribeExpandWidthClass} group-hover/subscribe:gap-1`}
+            >
+              {!isSubscribed && (
+                <BellIcon className="h-5 w-5 shrink-0 transition-colors duration-200 group-hover/subscribe:text-black" />
+              )}
+              {isSubscribed && (
+                <>
+                  <CheckIcon className="h-5 w-5 shrink-0 text-green-600 transition-opacity duration-200 group-hover/subscribe:opacity-0" />
+                  <span className="absolute inset-0 inline-flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover/subscribe:opacity-100">
+                    <CloseIcon className="h-5 w-5 shrink-0" />
+                  </span>
+                </>
+              )}
+              <span
+                className={`max-w-0 overflow-hidden whitespace-nowrap text-xs font-bold opacity-0 transition-all duration-200 ${subscribeTextExpandClass} group-hover/subscribe:opacity-100`}
+              >
+                {isSubscribed ? unsubscribeLabel : subscribeLabel}
+              </span>
+            </span>
+          </button>
+
+          <button
             onClick={onClose}
             className="group"
-            style={{ all: "unset", padding: "0.25rem", cursor: "pointer" }}
+            style={{ all: "unset", padding: "0", cursor: "pointer" }}
             aria-label="Close"
           >
             <CloseIcon />
@@ -870,9 +1331,21 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
             </div>
 
             <div className="flex-1 flex flex-col min-w-0">
-              <div className="mb-4 pr-24">
-                <h2 className="text-2xl font-bold text-gray-900 mb-1">{primaryTitle}</h2>
-                {secondaryTitle && <p className="text-sm text-gray-500">{secondaryTitle}</p>}
+              <div className="mb-4">
+                <h2
+                  className="mb-1 text-2xl font-bold text-gray-900 break-words [overflow-wrap:anywhere]"
+                  style={{ maxWidth: "calc(100% - 12rem)" }}
+                >
+                  {primaryTitle}
+                </h2>
+                {secondaryTitle && (
+                  <p
+                    className="text-sm text-gray-500 break-words [overflow-wrap:anywhere]"
+                    style={{ maxWidth: "calc(100% - 12rem)" }}
+                  >
+                    {secondaryTitle}
+                  </p>
+                )}
               </div>
 
               <div className="mb-4 flex-1 overflow-y-auto">
@@ -1059,27 +1532,58 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
             className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-5 shadow-2xl"
             onClick={(event) => event.stopPropagation()}
           >
-            <h4 className="text-base font-semibold text-gray-900">{confirmDialogTitle}</h4>
-            <p className="mt-2 text-sm text-gray-600">{confirmDialogMessage}</p>
+            <h4 className="text-lg font-semibold text-gray-900">{confirmDialogTitle}</h4>
+            <p className="mt-2 text-base text-gray-600">{confirmDialogMessage}</p>
 
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={closeConfirmDialog}
-                disabled={confirmBusy}
-                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {cancelLabel}
-              </button>
-              <button
-                type="button"
-                onClick={() => void confirmDialogAction()}
-                disabled={confirmBusy}
-                className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-sm text-gray-900 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {confirmBusy ? (language === "zh" ? "\u5904\u7406\u4e2d..." : "Processing...") : confirmActionLabel}
-              </button>
-            </div>
+            {!isUnsubscribeDialog && (
+              <div className="mt-5 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeConfirmDialog}
+                  disabled={confirmBusy}
+                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-900 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {cancelLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmDialogAction()}
+                  disabled={confirmBusy}
+                  className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-xs text-gray-900 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {confirmBusy ? (language === "zh" ? "\u5904\u7406\u4e2d..." : "Processing...") : confirmActionLabel}
+                </button>
+              </div>
+            )}
+
+            {isUnsubscribeDialog && (
+              <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeConfirmDialog}
+                  disabled={confirmBusy}
+                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-900 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {rollbackLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmUnsubscribeAction("keep_files")}
+                  disabled={confirmBusy}
+                  className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-xs text-gray-900 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {confirmBusy ? (language === "zh" ? "\u5904\u7406\u4e2d..." : "Processing...") : cancelAndKeepLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmUnsubscribeAction("delete_files")}
+                  disabled={confirmBusy}
+                  className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {confirmBusy ? (language === "zh" ? "\u5904\u7406\u4e2d..." : "Processing...") : cancelAndDeleteLabel}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

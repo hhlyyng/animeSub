@@ -6,6 +6,7 @@ using backend.Models.Dtos;
 using backend.Models.Jikan;
 using backend.Services.Interfaces;
 using backend.Services.Repositories;
+using backend.Services.Utilities;
 
 namespace backend.Services.Implementations;
 
@@ -50,14 +51,10 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     public async Task<AnimeListResponse> GetTodayAnimeEnrichedAsync(
-        string? bangumiToken = null,
         string? tmdbToken = null,
         CancellationToken cancellationToken = default)
     {
-        // Bangumi public API doesn't require authentication
-        // Set tokens on clients (if provided)
-        if (!string.IsNullOrWhiteSpace(bangumiToken))
-            _bangumiClient.SetToken(bangumiToken);
+        // Set TMDB token (if provided)
         _tmdbClient.SetToken(tmdbToken);
 
         _logger.LogInformation("Starting anime aggregation for today's schedule");
@@ -126,7 +123,7 @@ public class AnimeAggregationService : IAnimeAggregationService
 
             // Step 3: No pre-fetched data, fall back to real-time API fetch
             _logger.LogWarning("No pre-fetched data for weekday {Weekday}, falling back to real-time fetch", todayWeekday);
-            return await FetchAllFromApiAsync(bangumiToken, tmdbToken, todayWeekday, cancellationToken);
+            return await FetchAllFromApiAsync(tmdbToken, todayWeekday, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -233,9 +230,6 @@ public class AnimeAggregationService : IAnimeAggregationService
                          ? large.GetString() ?? ""
                          : "";
 
-        bool containsJapanese = !string.IsNullOrEmpty(oriTitle) &&
-            System.Text.RegularExpressions.Regex.IsMatch(oriTitle, @"[\p{IsHiragana}\p{IsKatakana}]");
-
         // Fetch TMDB and AniList in parallel
         var tmdbTask = _tmdbClient.GetAnimeSummaryAndBackdropAsync(oriTitle, airDate);
         var anilistTask = _aniListClient.GetAnimeInfoAsync(oriTitle);
@@ -250,8 +244,15 @@ public class AnimeAggregationService : IAnimeAggregationService
         var anilistResult = anilistTask.IsCompletedSuccessfully ? await anilistTask : null;
 
         // Determine final values
-        var jpTitle = containsJapanese ? oriTitle : "";
         var enTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "";
+        var resolvedTitles = TitleLanguageResolver.ResolveFromName(
+            oriTitle,
+            jpTitle: null,
+            chTitle: chTitle,
+            enTitle: enTitle);
+        var jpTitle = resolvedTitles.jpTitle;
+        chTitle = resolvedTitles.chTitle;
+        enTitle = resolvedTitles.enTitle;
 
         // Skip if no valid title
         if (string.IsNullOrEmpty(jpTitle) && string.IsNullOrEmpty(chTitle) && string.IsNullOrEmpty(enTitle))
@@ -310,7 +311,6 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     private async Task<AnimeListResponse> FetchAllFromApiAsync(
-        string? bangumiToken,
         string? tmdbToken,
         int weekday,
         CancellationToken cancellationToken)
@@ -410,14 +410,11 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     public async Task<AnimeListResponse> GetTopAnimeFromBangumiAsync(
-        string? bangumiToken = null,
         string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
-        // Set tokens for API clients
-        if (!string.IsNullOrWhiteSpace(bangumiToken))
-            _bangumiClient.SetToken(bangumiToken);
+        // Set TMDB token for enrichment
         _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} anime from Bangumi with enrichment", limit);
 
@@ -464,17 +461,29 @@ public class AnimeAggregationService : IAnimeAggregationService
 
                 cachedById.TryGetValue(id, out var cachedAnime);
 
-                var jpTitle = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
-                if (string.IsNullOrWhiteSpace(jpTitle))
-                {
-                    jpTitle = cachedAnime?.NameJapanese ?? "";
-                }
+                var nameTitle = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
 
                 var chTitle = subject.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
                 if (string.IsNullOrWhiteSpace(chTitle))
                 {
                     chTitle = cachedAnime?.NameChinese ?? "";
                 }
+
+                var enTitle = cachedAnime?.NameEnglish ?? "";
+                var resolvedTitles = TitleLanguageResolver.ResolveFromName(
+                    nameTitle,
+                    jpTitle: cachedAnime?.NameJapanese,
+                    chTitle: chTitle,
+                    enTitle: enTitle);
+                var jpTitle = resolvedTitles.jpTitle;
+                chTitle = resolvedTitles.chTitle;
+                enTitle = resolvedTitles.enTitle;
+
+                var titleForEnrichment = !string.IsNullOrWhiteSpace(nameTitle)
+                    ? nameTitle
+                    : (!string.IsNullOrWhiteSpace(jpTitle)
+                        ? jpTitle
+                        : (!string.IsNullOrWhiteSpace(chTitle) ? chTitle : enTitle));
 
                 var chDesc = subject.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
                 if (string.IsNullOrWhiteSpace(chDesc))
@@ -503,7 +512,6 @@ public class AnimeAggregationService : IAnimeAggregationService
                     portraitUrl = cachedAnime?.ImagePortrait ?? "";
                 }
 
-                var enTitle = cachedAnime?.NameEnglish ?? "";
                 var enDesc = cachedAnime?.DescEnglish ?? "";
                 var landscapeUrl = cachedAnime?.ImageLandscape ?? "";
                 var tmdbUrl = cachedAnime?.UrlTmdb ?? "";
@@ -514,7 +522,7 @@ public class AnimeAggregationService : IAnimeAggregationService
                     string.IsNullOrWhiteSpace(enDesc) ||
                     string.IsNullOrWhiteSpace(tmdbUrl))
                 {
-                    var tmdbResult = await EnrichWithTmdbAsync(jpTitle, airDate);
+                    var tmdbResult = await EnrichWithTmdbAsync(titleForEnrichment, airDate);
                     if (string.IsNullOrWhiteSpace(enTitle))
                     {
                         enTitle = tmdbResult.enTitle;
@@ -535,7 +543,7 @@ public class AnimeAggregationService : IAnimeAggregationService
 
                 if (string.IsNullOrEmpty(landscapeUrl))
                 {
-                    var anilistData = await EnrichWithAniListAsync(jpTitle);
+                    var anilistData = await EnrichWithAniListAsync(titleForEnrichment);
                     if (anilistData != null)
                     {
                         landscapeUrl = anilistData.BannerImage ?? "";
@@ -1074,7 +1082,9 @@ public class AnimeAggregationService : IAnimeAggregationService
             if (result.ValueKind == JsonValueKind.Undefined) return ("", "", "", "");
 
             var id = result.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+            var name = result.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
             var chTitle = result.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+            chTitle = TitleLanguageResolver.ResolveFromName(name, chTitle: chTitle).chTitle;
             var chDesc = result.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
 
             // If no summary in search result, fetch detail
