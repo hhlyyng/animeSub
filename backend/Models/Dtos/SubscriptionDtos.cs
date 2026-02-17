@@ -231,6 +231,31 @@ public class ManualDownloadAnimeResponse
 }
 
 /// <summary>
+/// Lightweight DTO returning only hash + metadata for a download task.
+/// The frontend uses this to correlate with qBittorrent polling data.
+/// </summary>
+public class TaskHashResponse
+{
+    public string Hash { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public DateTime PublishedAt { get; set; }
+    public long? FileSize { get; set; }
+    public bool IsCompleted { get; set; }
+
+    public static TaskHashResponse FromEntity(Data.Entities.DownloadHistoryEntity entity)
+    {
+        return new TaskHashResponse
+        {
+            Hash = entity.TorrentHash,
+            Title = entity.Title,
+            PublishedAt = entity.PublishedAt,
+            FileSize = entity.FileSize,
+            IsCompleted = entity.Status == Data.Entities.DownloadStatus.Completed
+        };
+    }
+}
+
+/// <summary>
 /// Response DTO for subscription check result
 /// </summary>
 public class CheckSubscriptionResponse

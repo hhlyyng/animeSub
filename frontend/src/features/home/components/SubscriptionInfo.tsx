@@ -82,7 +82,7 @@ export function SubscriptionInfo({ topic, items, language, onSelect, emptyText }
             <div className="grid gap-4" style={gridStyle}>
               {items.map((anime, index) => {
                 const title = resolveDisplayTitle(anime, language);
-                const cover = anime.images?.portrait || anime.images?.landscape;
+                const cover = anime.images?.portrait?.trim() || anime.images?.landscape?.trim() || "";
 
                 return (
                   <article

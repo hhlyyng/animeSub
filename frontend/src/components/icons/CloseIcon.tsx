@@ -10,7 +10,7 @@ export function CloseIcon({ className = "w-5 h-5" }: CloseIconProps) {
       viewBox="0 0 24 24"
     >
       <path
-        className="stroke-gray-600 group-hover:stroke-black transition-colors"
+        stroke="currentColor"
         strokeLinecap="round"
         strokeLinejoin="round"
         strokeWidth={4}

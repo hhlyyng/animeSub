@@ -251,6 +251,103 @@ public partial class MikanClient : IMikanClient
         return null;
     }
 
+    public async Task<List<MikanAnimeEntry>> SearchAnimeEntriesAsync(string title)
+    {
+        var queries = BuildSearchQueries(title);
+        var entries = new List<MikanAnimeEntry>();
+        var seenIds = new HashSet<string>();
+
+        foreach (var query in queries)
+        {
+            var searchUrl = $"Home/Search?searchstr={query.QueryValue}";
+            _logger.LogInformation("SearchAnimeEntries: searching Mikan with URL: {SearchUrl}", searchUrl);
+
+            try
+            {
+                var response = await _httpClient.GetAsync(searchUrl);
+                response.EnsureSuccessStatusCode();
+
+                var htmlContent = await response.Content.ReadAsStringAsync();
+                var doc = new HtmlDocument();
+                doc.LoadHtml(htmlContent);
+
+                var anUl = doc.DocumentNode.SelectSingleNode("//ul[contains(@class, 'an-ul')]");
+                if (anUl == null)
+                {
+                    _logger.LogInformation("SearchAnimeEntries: no an-ul found for query mode={Mode}", query.Mode);
+                    continue;
+                }
+
+                var liNodes = anUl.SelectNodes("li");
+                if (liNodes == null || liNodes.Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (var li in liNodes)
+                {
+                    var bangumiLink = li.SelectSingleNode(".//a[contains(@href, '/Home/Bangumi/')]");
+                    if (bangumiLink == null)
+                    {
+                        continue;
+                    }
+
+                    var href = bangumiLink.GetAttributeValue("href", string.Empty);
+                    var mikanBangumiId = ExtractBangumiIdFromBangumiUrl(href);
+                    if (string.IsNullOrEmpty(mikanBangumiId) || !seenIds.Add(mikanBangumiId))
+                    {
+                        continue;
+                    }
+
+                    // Extract title from .an-text element's title attribute, fallback to inner text
+                    var anText = li.SelectSingleNode(".//*[contains(@class, 'an-text')]");
+                    var entryTitle = anText?.GetAttributeValue("title", null)
+                        ?? anText?.InnerText?.Trim()
+                        ?? HtmlEntity.DeEntitize(bangumiLink.InnerText?.Trim() ?? string.Empty);
+
+                    // Extract image URL from span.b-lazy[data-src] (Mikan uses lazy-loading)
+                    var imageUrl = string.Empty;
+                    var lazySpan = li.SelectSingleNode(".//span[contains(@class, 'b-lazy')]");
+                    if (lazySpan != null)
+                    {
+                        var dataSrc = lazySpan.GetAttributeValue("data-src", string.Empty);
+                        if (!string.IsNullOrWhiteSpace(dataSrc))
+                        {
+                            if (dataSrc.StartsWith("/"))
+                            {
+                                var baseUrl = _config.BaseUrl.TrimEnd('/');
+                                imageUrl = $"{baseUrl}{dataSrc}";
+                            }
+                            else
+                            {
+                                imageUrl = dataSrc;
+                            }
+                        }
+                    }
+
+                    entries.Add(new MikanAnimeEntry
+                    {
+                        MikanBangumiId = mikanBangumiId,
+                        Title = HtmlEntity.DeEntitize(entryTitle),
+                        ImageUrl = imageUrl,
+                    });
+                }
+
+                if (entries.Count > 0)
+                {
+                    _logger.LogInformation("SearchAnimeEntries: found {Count} entries", entries.Count);
+                    return entries;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "SearchAnimeEntries failed for query mode={Mode}", query.Mode);
+            }
+        }
+
+        return entries;
+    }
+
     private static List<(string QueryValue, string Mode)> BuildSearchQueries(string title)
     {
         var queries = new List<(string QueryValue, string Mode)>();
@@ -261,6 +358,16 @@ public partial class MikanClient : IMikanClient
         var plusQuery = TryBuildPlusJoinedSearchQuery(title);
         AddQueryCandidate(queries, dedupe, plusQuery, "plus-joined");
         AddQueryCandidate(queries, dedupe, Uri.EscapeDataString(title), "escape-data-string");
+
+        // Titles with slashes (e.g. "Fate/strange Fake") often get more results
+        // when the slash is replaced with a space
+        if (title.Contains('/'))
+        {
+            var slashStripped = title.Replace("/", " ").Replace("  ", " ").Trim();
+            AddQueryCandidate(queries, dedupe, EncodeSearchQueryForMikan(slashStripped), "slash-stripped");
+            var slashPlusQuery = TryBuildPlusJoinedSearchQuery(slashStripped);
+            AddQueryCandidate(queries, dedupe, slashPlusQuery, "slash-stripped-plus");
+        }
 
         return queries;
     }
@@ -577,16 +684,32 @@ public partial class MikanClient : IMikanClient
                 "Returning parsed feed from cache for Mikan ID: {MikanId} (updated at {UpdatedAt:O})",
                 mikanBangumiId,
                 cachedUpdatedAt.Value);
+            // Attach persisted subgroup mapping from DB
+            cachedResponse.SubgroupMapping = await LoadCachedSubgroupMappingAsync(mikanBangumiId);
             return cachedResponse;
         }
 
         try
         {
-            var feed = await GetAnimeFeedAsync(mikanBangumiId);
+            // Parallel-fetch RSS feed and subgroup mapping from Mikan page
+            var feedTask = GetAnimeFeedAsync(mikanBangumiId);
+            var subgroupTask = GetSubgroupsAsync(mikanBangumiId);
+
+            await Task.WhenAll(feedTask, subgroupTask);
+
+            var feed = feedTask.Result;
+            var subgroups = subgroupTask.Result;
+
             _logger.LogInformation("Retrieved RSS feed: Title={Title}, ItemsCount={Count}", feed.Title, feed.Items.Count);
 
             var response = BuildParsedFeedResponse(feed);
-            await UpsertCachedFeedAsync(mikanBangumiId, response);
+            response.SubgroupMapping = subgroups;
+
+            // Persist feed cache and subgroup mapping in parallel
+            var cacheFeedTask = UpsertCachedFeedAsync(mikanBangumiId, response);
+            var cacheSubgroupTask = UpsertCachedSubgroupMappingAsync(mikanBangumiId, subgroups);
+            await Task.WhenAll(cacheFeedTask, cacheSubgroupTask);
+
             return response;
         }
         catch (Exception ex) when (cachedResponse != null)
@@ -596,8 +719,77 @@ public partial class MikanClient : IMikanClient
                 "Failed to refresh parsed feed for Mikan ID: {MikanId}, using stale cache (updated at {UpdatedAt:O})",
                 mikanBangumiId,
                 cachedUpdatedAt);
+            cachedResponse.SubgroupMapping = await LoadCachedSubgroupMappingAsync(mikanBangumiId);
             return cachedResponse;
         }
+    }
+
+    public async Task<List<MikanSubgroupInfo>> GetSubgroupsAsync(string mikanBangumiId)
+    {
+        var results = new List<MikanSubgroupInfo>();
+
+        try
+        {
+            var url = $"Home/Bangumi/{mikanBangumiId}";
+            _logger.LogInformation("Scraping Mikan Bangumi page for subgroups: {Url}", url);
+
+            var response = await _httpClient.GetAsync(url);
+            response.EnsureSuccessStatusCode();
+
+            var htmlContent = await response.Content.ReadAsStringAsync();
+            var doc = new HtmlDocument();
+            doc.LoadHtml(htmlContent);
+
+            // Mikan page structure: each subgroup section has:
+            //   <a href="/Home/PublishGroup/XXX">SubgroupName</a>
+            //   <a href="/RSS/Bangumi?bangumiId=...&subgroupid=XXX" class="mikan-rss">...</a>
+            var rssLinks = doc.DocumentNode.SelectNodes("//a[contains(@href, 'subgroupid=')]");
+            if (rssLinks == null || rssLinks.Count == 0)
+            {
+                _logger.LogWarning("No subgroup RSS links found on Mikan page for {MikanBangumiId}", mikanBangumiId);
+                return results;
+            }
+
+            var seen = new HashSet<string>();
+            foreach (var rssLink in rssLinks)
+            {
+                var href = rssLink.GetAttributeValue("href", "");
+                var idMatch = Regex.Match(href, @"subgroupid=(\d+)");
+                if (!idMatch.Success) continue;
+
+                var subgroupId = idMatch.Groups[1].Value;
+                if (seen.Contains(subgroupId)) continue;
+                seen.Add(subgroupId);
+
+                // The subgroup name link is the preceding sibling <a> with href containing /Home/PublishGroup/
+                var parent = rssLink.ParentNode;
+                if (parent == null) continue;
+
+                var nameLink = parent.SelectSingleNode(".//a[contains(@href, '/Home/PublishGroup/')]");
+                var name = nameLink != null
+                    ? HtmlEntity.DeEntitize(nameLink.InnerText?.Trim() ?? "")
+                    : "";
+
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    name = $"Subgroup #{subgroupId}";
+                }
+
+                results.Add(new MikanSubgroupInfo
+                {
+                    SubgroupId = subgroupId,
+                    Name = name
+                });
+            }
+
+            _logger.LogInformation("Found {Count} subgroups for Mikan ID {MikanBangumiId}", results.Count, mikanBangumiId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to scrape subgroups for Mikan ID {MikanBangumiId}", mikanBangumiId);
+        }
+
+        return results;
     }
 
     private MikanFeedResponse BuildParsedFeedResponse(MikanRssFeed feed)
@@ -819,6 +1011,59 @@ public partial class MikanClient : IMikanClient
         }
 
         await _dbContext.SaveChangesAsync();
+    }
+
+    private async Task<List<MikanSubgroupInfo>> LoadCachedSubgroupMappingAsync(string mikanBangumiId)
+    {
+        if (_dbContext == null)
+        {
+            return new List<MikanSubgroupInfo>();
+        }
+
+        return await _dbContext.MikanSubgroups
+            .AsNoTracking()
+            .Where(s => s.MikanBangumiId == mikanBangumiId)
+            .Select(s => new MikanSubgroupInfo
+            {
+                SubgroupId = s.SubgroupId,
+                Name = s.SubgroupName
+            })
+            .ToListAsync();
+    }
+
+    private async Task UpsertCachedSubgroupMappingAsync(string mikanBangumiId, List<MikanSubgroupInfo> subgroups)
+    {
+        if (_dbContext == null || subgroups.Count == 0)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+
+        foreach (var sg in subgroups)
+        {
+            var existing = await _dbContext.MikanSubgroups
+                .FirstOrDefaultAsync(s => s.MikanBangumiId == mikanBangumiId && s.SubgroupId == sg.SubgroupId);
+
+            if (existing != null)
+            {
+                existing.SubgroupName = sg.Name;
+                existing.UpdatedAt = now;
+            }
+            else
+            {
+                _dbContext.MikanSubgroups.Add(new Data.Entities.MikanSubgroupEntity
+                {
+                    MikanBangumiId = mikanBangumiId,
+                    SubgroupId = sg.SubgroupId,
+                    SubgroupName = sg.Name,
+                    UpdatedAt = now
+                });
+            }
+        }
+
+        await _dbContext.SaveChangesAsync();
+        _logger.LogInformation("Persisted {Count} subgroup mappings for Mikan ID {MikanBangumiId}", subgroups.Count, mikanBangumiId);
     }
 
     private bool IsFeedCacheExpired(DateTime updatedAt)

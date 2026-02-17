@@ -214,6 +214,7 @@ function FieldLabel({
 
 export default function SettingPage() {
   const language = useAppStore((state) => state.language);
+  const loginUsername = useAppStore((state) => state.username);
   const zh = language === "zh";
 
   const [loading, setLoading] = useState(true);
@@ -224,8 +225,15 @@ export default function SettingPage() {
   const [baseline, setBaseline] = useState<BaselineSnapshot | null>(null);
 
   const [appUsername, setAppUsername] = useState("");
-  const [appPassword, setAppPassword] = useState("");
-  const [showAppPassword, setShowAppPassword] = useState(false);
+
+  // Credentials change (login password + username)
+  const [currentLoginPassword, setCurrentLoginPassword] = useState("");
+  const [newLoginPassword, setNewLoginPassword] = useState("");
+  const [confirmLoginPassword, setConfirmLoginPassword] = useState("");
+  const [showCurrentLoginPw, setShowCurrentLoginPw] = useState(false);
+  const [showNewLoginPw, setShowNewLoginPw] = useState(false);
+  const [showConfirmLoginPw, setShowConfirmLoginPw] = useState(false);
+  const [changingCredentials, setChangingCredentials] = useState(false);
   const [tmdbToken, setTmdbToken] = useState("");
   const [showTmdbToken, setShowTmdbToken] = useState(false);
   const [host, setHost] = useState("");
@@ -273,11 +281,20 @@ export default function SettingPage() {
     sectionMikan: "Mikan",
     sectionPreference: zh ? "下载偏好" : "Download Preferences",
 
-    animeSubLabel: zh ? "AnimeSub 用户名" : "AnimeSub Username",
-    animeSubPasswordLabel: zh ? "AnimeSub 密码" : "AnimeSub Password",
+    animeSubLabel: zh ? "用户名" : "Username",
     animeSubHelp: zh
-      ? "用于 AnimeSub 内部展示，不会影响 qB 或第三方站点账号。"
-      : "Used as your display name inside AnimeSub; it does not affect qB or third-party accounts.",
+      ? "修改用户名或密码后需要重新登录。"
+      : "You will be redirected to login after changing username or password.",
+
+    currentPasswordLabel: zh ? "当前密码" : "Current Password",
+    newPasswordLabel: zh ? "新密码" : "New Password",
+    confirmPasswordLabel: zh ? "确认新密码" : "Confirm New Password",
+    changeCredentialsBtn: zh ? "保存修改" : "Save Changes",
+    changingCredentialsBtn: zh ? "保存中..." : "Saving...",
+    currentPasswordPlaceholder: zh ? "请输入当前登录密码" : "Enter current login password",
+    newPasswordPlaceholder: zh ? "请输入新密码（至少4位）" : "New password (min 4 chars)",
+    confirmPasswordPlaceholder: zh ? "再次输入新密码" : "Confirm new password",
+    passwordMismatch: zh ? "两次输入的新密码不一致" : "New passwords do not match",
 
     tmdbHelp: zh
       ? "TMDB Token 用于访问 TMDB API，获取封面、简介和元数据。"
@@ -346,9 +363,7 @@ export default function SettingPage() {
 
       const normalizedOrder = normalizePriorityOrder(data.downloadPreferences.priorityOrder);
 
-      setAppUsername(data.animeSub?.username ?? "");
-      setAppPassword("");
-      setShowAppPassword(false);
+      setAppUsername(loginUsername || data.animeSub?.username || "");
       setTmdbToken("");
       setShowTmdbToken(false);
       setHost(data.qbittorrent.host || "");
@@ -366,7 +381,7 @@ export default function SettingPage() {
       setPriorityOrder(normalizedOrder);
 
       setBaseline({
-        appUsername: (data.animeSub?.username ?? "").trim(),
+        appUsername: (loginUsername || data.animeSub?.username || "").trim(),
         appPasswordConfigured: Boolean(data.animeSub?.passwordConfigured),
         host: (data.qbittorrent.host || "").trim(),
         port: String(data.qbittorrent.port || 8080),
@@ -400,6 +415,48 @@ export default function SettingPage() {
     }
   };
 
+  const handleChangeCredentials = async () => {
+    if (!currentLoginPassword.trim()) {
+      toast.error(zh ? "请输入当前密码" : "Please enter current password");
+      return;
+    }
+
+    const hasNewPw = newLoginPassword.trim().length > 0;
+    const usernameChanged = baseline ? appUsername.trim() !== baseline.appUsername : false;
+
+    if (!hasNewPw && !usernameChanged) {
+      toast.error(zh ? "没有需要修改的内容" : "Nothing to change");
+      return;
+    }
+    if (hasNewPw && newLoginPassword.trim().length < 4) {
+      toast.error(zh ? "新密码至少4位" : "New password must be at least 4 characters");
+      return;
+    }
+    if (hasNewPw && newLoginPassword !== confirmLoginPassword) {
+      toast.error(text.passwordMismatch);
+      return;
+    }
+
+    try {
+      setChangingCredentials(true);
+      const token = useAppStore.getState().token;
+      await authApi.changeCredentials(
+        currentLoginPassword,
+        token ?? "",
+        hasNewPw ? newLoginPassword : undefined,
+        usernameChanged ? appUsername.trim() : undefined,
+      );
+      toast.success(zh ? "修改成功，请重新登录" : "Updated, please log in again");
+      // Force logout and redirect to login
+      useAppStore.getState().logout();
+      window.location.href = "/login";
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : (zh ? "修改失败" : "Failed to update credentials"));
+    } finally {
+      setChangingCredentials(false);
+    }
+  };
+
   useEffect(() => {
     void loadProfile();
   }, []);
@@ -424,7 +481,6 @@ export default function SettingPage() {
 
   const hasConfiguredPassword = Boolean(profile?.qbittorrent?.passwordConfigured || baseline?.passwordConfigured);
   const passwordAvailableForSave = password.trim().length > 0 || hasConfiguredPassword;
-  const hasConfiguredAppPassword = Boolean(profile?.animeSub?.passwordConfigured || baseline?.appPasswordConfigured);
 
   const normalizedCurrentPolling = normalizePollingText(pollingIntervalMinutes);
   const parsedPolling =
@@ -437,8 +493,6 @@ export default function SettingPage() {
     (normalizedCurrentPolling !== "invalid" && parsedPolling !== null && parsedPolling >= 1 && parsedPolling <= 1440);
 
   const tmdbChanged = tmdbToken.trim().length > 0;
-  const appUsernameChanged = baseline ? appUsername.trim() !== baseline.appUsername : false;
-  const appPasswordChanged = appPassword.trim().length > 0;
   const hostChanged = baseline ? host.trim() !== baseline.host : false;
   const portChanged = baseline ? normalizePortText(port) !== normalizePortText(baseline.port) : false;
   const usernameChanged = baseline ? username.trim() !== baseline.username : false;
@@ -460,8 +514,6 @@ export default function SettingPage() {
 
   const hasAnyChange =
     tmdbChanged ||
-    appUsernameChanged ||
-    appPasswordChanged ||
     qbConnectionChanged ||
     categoryChanged ||
     tagsChanged ||
@@ -680,7 +732,6 @@ export default function SettingPage() {
         },
         animeSub: {
           username: appUsername.trim(),
-          password: appPassword.trim() ? appPassword : null,
         },
         mikan: {
           pollingIntervalMinutes: parsedPolling,
@@ -717,47 +768,80 @@ export default function SettingPage() {
 
       <div className="mb-5 rounded-xl border border-gray-200 bg-white p-5">
         <h2 className="mb-4 mt-0 text-2xl font-bold text-gray-900">{text.sectionAnimeSub}</h2>
+        <p className="mb-4 text-sm text-gray-500">{text.animeSubHelp}</p>
         <div className="space-y-3">
           <div className="grid grid-cols-[300px_1fr] items-start gap-3">
-            <FieldLabel title={text.animeSubLabel} helpText={text.animeSubHelp} />
+            <FieldLabel title={text.animeSubLabel} />
             <input
               type="text"
               value={appUsername}
-              onChange={(event) => {
-                setAppUsername(event.target.value);
-                setTestSummaryMessage("");
-              }}
+              onChange={(e) => setAppUsername(e.target.value)}
               className="h-10 rounded-md border border-gray-300 px-3 text-sm"
             />
           </div>
           <div className="grid grid-cols-[300px_1fr] items-start gap-3">
-            <FieldLabel title={text.animeSubPasswordLabel} />
+            <FieldLabel title={text.currentPasswordLabel} />
             <div className="relative">
               <input
-                type={showAppPassword ? "text" : "password"}
-                value={appPassword}
-                onChange={(event) => {
-                  setAppPassword(event.target.value);
-                  setTestSummaryMessage("");
-                }}
-                placeholder={
-                  hasConfiguredAppPassword
-                    ? zh
-                      ? "已配置密码，留空保持当前"
-                      : "Password configured; blank keeps current"
-                    : zh
-                      ? "请输入 AnimeSub 密码"
-                      : "Enter AnimeSub password"
-                }
+                type={showCurrentLoginPw ? "text" : "password"}
+                value={currentLoginPassword}
+                onChange={(e) => setCurrentLoginPassword(e.target.value)}
+                placeholder={text.currentPasswordPlaceholder}
                 className="h-10 w-full rounded-md border border-gray-300 px-3 pr-12 text-sm"
               />
               <EyeToggleButton
-                visible={showAppPassword}
-                onToggle={() => setShowAppPassword((prev) => !prev)}
+                visible={showCurrentLoginPw}
+                onToggle={() => setShowCurrentLoginPw((prev) => !prev)}
                 showLabel={text.show}
                 hideLabel={text.hide}
               />
             </div>
+          </div>
+          <div className="grid grid-cols-[300px_1fr] items-start gap-3">
+            <FieldLabel title={text.newPasswordLabel} />
+            <div className="relative">
+              <input
+                type={showNewLoginPw ? "text" : "password"}
+                value={newLoginPassword}
+                onChange={(e) => setNewLoginPassword(e.target.value)}
+                placeholder={text.newPasswordPlaceholder}
+                className="h-10 w-full rounded-md border border-gray-300 px-3 pr-12 text-sm"
+              />
+              <EyeToggleButton
+                visible={showNewLoginPw}
+                onToggle={() => setShowNewLoginPw((prev) => !prev)}
+                showLabel={text.show}
+                hideLabel={text.hide}
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-[300px_1fr] items-start gap-3">
+            <FieldLabel title={text.confirmPasswordLabel} />
+            <div className="relative">
+              <input
+                type={showConfirmLoginPw ? "text" : "password"}
+                value={confirmLoginPassword}
+                onChange={(e) => setConfirmLoginPassword(e.target.value)}
+                placeholder={text.confirmPasswordPlaceholder}
+                className="h-10 w-full rounded-md border border-gray-300 px-3 pr-12 text-sm"
+              />
+              <EyeToggleButton
+                visible={showConfirmLoginPw}
+                onToggle={() => setShowConfirmLoginPw((prev) => !prev)}
+                showLabel={text.show}
+                hideLabel={text.hide}
+              />
+            </div>
+          </div>
+          <div className="flex justify-end pt-1">
+            <button
+              type="button"
+              onClick={() => void handleChangeCredentials()}
+              disabled={changingCredentials || !currentLoginPassword.trim()}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-gray-900 bg-transparent px-4 text-sm font-medium text-gray-900 hover:bg-gray-100 disabled:cursor-not-allowed disabled:border-gray-300 disabled:text-gray-400"
+            >
+              {changingCredentials ? text.changingCredentialsBtn : text.changeCredentialsBtn}
+            </button>
           </div>
         </div>
       </div>

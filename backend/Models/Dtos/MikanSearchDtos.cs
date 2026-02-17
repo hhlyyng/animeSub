@@ -68,6 +68,11 @@ public class MikanFeedResponse
     public List<string> AvailableSubgroups { get; set; } = new();
 
     /// <summary>
+    /// Subgroup name → Mikan subgroup ID mapping (scraped from bangumi page)
+    /// </summary>
+    public List<MikanSubgroupInfo> SubgroupMapping { get; set; } = new();
+
+    /// <summary>
     /// List of available resolutions in the feed
     /// </summary>
     public List<string> AvailableResolutions { get; set; } = new();
@@ -239,4 +244,37 @@ public class DownloadTorrentRequest
     /// Optional related anime title (used for manual download aggregation)
     /// </summary>
     public string? AnimeTitle { get; set; }
+
+    /// <summary>
+    /// Optional subscription ID (when download is triggered from a subscription context)
+    /// </summary>
+    public int? SubscriptionId { get; set; }
+}
+
+/// <summary>
+/// A single anime entry from Mikan search results
+/// </summary>
+public class MikanAnimeEntry
+{
+    public string MikanBangumiId { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string ImageUrl { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Request to correct the Mikan Bangumi ID for a given Bangumi ID
+/// </summary>
+public class CorrectMikanBangumiIdRequest
+{
+    public int BangumiId { get; set; }
+    public string MikanBangumiId { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Subgroup info scraped from Mikan Bangumi page (name + numeric ID)
+/// </summary>
+public class MikanSubgroupInfo
+{
+    public string SubgroupId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
 }

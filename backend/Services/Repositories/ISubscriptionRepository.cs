@@ -23,9 +23,11 @@ public interface ISubscriptionRepository
     Task<List<DownloadHistoryEntity>> GetManualDownloadsWithAnimeContextAsync();
     Task<DownloadHistoryEntity?> GetDownloadByHashAsync(string torrentHash);
     Task<bool> ExistsDownloadByHashAsync(string torrentHash);
+    Task<HashSet<string>> GetExistingHashesAsync(IEnumerable<string> hashes);
     Task<DownloadHistoryEntity> CreateDownloadHistoryAsync(DownloadHistoryEntity history);
     Task<DownloadHistoryEntity> UpdateDownloadHistoryAsync(DownloadHistoryEntity history);
     Task<List<DownloadHistoryEntity>> GetPendingDownloadsAsync();
+    Task ClearDownloadHistoryAsync(int subscriptionId);
 
     // Statistics
     Task UpdateSubscriptionLastCheckedAsync(int subscriptionId);

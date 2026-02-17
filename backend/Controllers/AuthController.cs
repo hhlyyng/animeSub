@@ -159,6 +159,41 @@ public class AuthController : ControllerBase
         }
     }
 
+    [HttpPost("change-credentials")]
+    [Authorize]
+    public async Task<IActionResult> ChangeCredentials([FromBody] ChangeCredentialsRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.CurrentPassword))
+        {
+            return BadRequest(new { message = "Current password is required" });
+        }
+
+        var hasNewPassword = !string.IsNullOrWhiteSpace(request.NewPassword);
+        var hasNewUsername = !string.IsNullOrWhiteSpace(request.NewUsername);
+
+        if (!hasNewPassword && !hasNewUsername)
+        {
+            return BadRequest(new { message = "New password or new username is required" });
+        }
+
+        if (hasNewPassword && request.NewPassword!.Length < 4)
+        {
+            return BadRequest(new { message = "New password must be at least 4 characters" });
+        }
+
+        var success = await _authService.ChangeCredentialsAsync(
+            request.CurrentPassword,
+            hasNewPassword ? request.NewPassword : null,
+            hasNewUsername ? request.NewUsername : null);
+
+        if (!success)
+        {
+            return BadRequest(new { message = "Current password is incorrect" });
+        }
+
+        return Ok(new { message = "Credentials updated successfully" });
+    }
+
     [HttpGet("background")]
     [AllowAnonymous]
     public IActionResult GetBackground()
@@ -299,6 +334,8 @@ public class AuthController : ControllerBase
 }
 
 public record LoginRequest(string? Username, string? Password);
+
+public record ChangeCredentialsRequest(string? CurrentPassword, string? NewPassword, string? NewUsername);
 
 public record SetupRequest(
     string? Username,

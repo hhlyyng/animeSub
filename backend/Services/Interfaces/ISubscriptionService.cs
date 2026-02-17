@@ -79,6 +79,16 @@ public interface ISubscriptionService
     Task<List<DownloadHistoryResponse>> GetManualDownloadHistoryAsync(int bangumiId, int limit = 50);
 
     /// <summary>
+    /// Get lightweight task hashes for a subscription (for qBittorrent correlation)
+    /// </summary>
+    Task<List<TaskHashResponse>> GetTaskHashesAsync(int subscriptionId, int limit = 300);
+
+    /// <summary>
+    /// Get lightweight task hashes for manual downloads by Bangumi ID
+    /// </summary>
+    Task<List<TaskHashResponse>> GetManualTaskHashesAsync(int bangumiId, int limit = 300);
+
+    /// <summary>
     /// Filter RSS items based on subscription keywords
     /// </summary>
     List<MikanRssItem> FilterRssItems(List<MikanRssItem> items, string? keywordInclude, string? keywordExclude);

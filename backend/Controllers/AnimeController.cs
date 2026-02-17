@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using backend.Data.Entities;
 using backend.Models.Dtos;
 using backend.Services;
 using backend.Services.Interfaces;
+using backend.Services.Repositories;
 using backend.Services.Validators;
 
 namespace backend.Controllers;
@@ -15,17 +17,20 @@ public class AnimeController : ControllerBase
     private readonly IAnimeAggregationService _aggregationService;
     private readonly ITokenStorageService _tokenStorage;
     private readonly TokenValidator _tokenValidator;
+    private readonly IAnimeRepository _animeRepository;
     private readonly ILogger<AnimeController> _logger;
 
     public AnimeController(
         IAnimeAggregationService aggregationService,
         ITokenStorageService tokenStorage,
         TokenValidator tokenValidator,
+        IAnimeRepository animeRepository,
         ILogger<AnimeController> logger)
     {
         _aggregationService = aggregationService ?? throw new ArgumentNullException(nameof(aggregationService));
         _tokenStorage = tokenStorage ?? throw new ArgumentNullException(nameof(tokenStorage));
         _tokenValidator = tokenValidator ?? throw new ArgumentNullException(nameof(tokenValidator));
+        _animeRepository = animeRepository ?? throw new ArgumentNullException(nameof(animeRepository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -175,5 +180,58 @@ public class AnimeController : ControllerBase
             data = new { count = response.Count, animes = response.Animes },
             message = response.Message
         });
+    }
+
+    /// <summary>
+    /// Batch lookup anime info by Bangumi IDs from the local database
+    /// </summary>
+    [HttpPost("batch")]
+    public async Task<IActionResult> GetAnimeBatch([FromBody] List<int> bangumiIds)
+    {
+        if (bangumiIds == null || bangumiIds.Count == 0)
+        {
+            return Ok(new { success = true, data = new { animes = Array.Empty<AnimeInfoDto>() } });
+        }
+
+        var validIds = bangumiIds.Where(id => id > 0).Distinct().Take(50).ToList();
+        if (validIds.Count == 0)
+        {
+            return Ok(new { success = true, data = new { animes = Array.Empty<AnimeInfoDto>() } });
+        }
+
+        var entities = await _animeRepository.GetAnimeInfoBatchAsync(validIds);
+        var dtos = entities.Select(ConvertEntityToDto).ToList();
+
+        return Ok(new
+        {
+            success = true,
+            data = new { animes = dtos }
+        });
+    }
+
+    private static AnimeInfoDto ConvertEntityToDto(AnimeInfoEntity entity)
+    {
+        return new AnimeInfoDto
+        {
+            BangumiId = entity.BangumiId.ToString(),
+            JpTitle = entity.NameJapanese ?? "",
+            ChTitle = entity.NameChinese ?? "",
+            EnTitle = entity.NameEnglish ?? "",
+            ChDesc = entity.DescChinese ?? "",
+            EnDesc = entity.DescEnglish ?? "",
+            Score = entity.Score ?? "0",
+            Images = new AnimeImagesDto
+            {
+                Portrait = entity.ImagePortrait ?? "",
+                Landscape = entity.ImageLandscape ?? ""
+            },
+            ExternalUrls = new ExternalUrlsDto
+            {
+                Bangumi = entity.UrlBangumi ?? $"https://bgm.tv/subject/{entity.BangumiId}",
+                Tmdb = entity.UrlTmdb ?? "",
+                Anilist = entity.UrlAnilist ?? ""
+            },
+            MikanBangumiId = entity.MikanBangumiId
+        };
     }
 }

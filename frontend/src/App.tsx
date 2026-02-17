@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { useAppStore } from "./stores/useAppStores";
 import * as authApi from "./services/authApi";
@@ -35,6 +35,10 @@ export default function App() {
     void checkAuth();
   }, []);
 
+  const onSetupComplete = useCallback(() => {
+    setNeedsSetup(false);
+  }, []);
+
   if (!authChecked) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-gray-50">
@@ -46,7 +50,7 @@ export default function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/setup" element={<SetupPage />} />
+        <Route path="/setup" element={<SetupPage onSetupComplete={onSetupComplete} />} />
         <Route path="/login" element={
           needsSetup ? <Navigate to="/setup" replace /> : <LoginBlock />
         } />

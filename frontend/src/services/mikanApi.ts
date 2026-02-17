@@ -1,7 +1,9 @@
 import type {
   DownloadTorrentRequest,
+  MikanAnimeEntry,
   MikanFeedResponse,
   MikanSearchResult,
+  MikanSubgroupInfo,
   ParsedRssItem,
   TorrentInfo,
 } from "../types/mikan";
@@ -142,6 +144,35 @@ export async function removeTorrent(hash: string, deleteFiles = false): Promise<
   );
   if (!response.ok) {
     throw new Error(await resolveApiErrorMessage(response, `Failed to remove torrent: ${response.statusText}`));
+  }
+}
+
+export async function getSubgroups(mikanBangumiId: string): Promise<MikanSubgroupInfo[]> {
+  const params = new URLSearchParams({ mikanBangumiId });
+  const response = await authFetch(`${API_BASE}/mikan/subgroups?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(await resolveApiErrorMessage(response, `Failed to get subgroups: ${response.statusText}`));
+  }
+  return response.json();
+}
+
+export async function searchMikanEntries(title: string): Promise<MikanAnimeEntry[]> {
+  const params = new URLSearchParams({ title });
+  const response = await authFetch(`${API_BASE}/mikan/search-entries?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(await resolveApiErrorMessage(response, `Failed to search entries: ${response.statusText}`));
+  }
+  return response.json();
+}
+
+export async function correctMikanBangumiId(bangumiId: number, mikanBangumiId: string): Promise<void> {
+  const response = await authFetch(`${API_BASE}/mikan/correct-bangumi-id`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bangumiId, mikanBangumiId }),
+  });
+  if (!response.ok) {
+    throw new Error(await resolveApiErrorMessage(response, `Failed to correct bangumi ID: ${response.statusText}`));
   }
 }
 

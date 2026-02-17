@@ -3,6 +3,7 @@ import type { AnimeInfo } from "../../../types/anime";
 import type { ManualDownloadAnimeItem, SubscriptionItem } from "../../../types/subscription";
 import { useAppStore } from "../../../stores/useAppStores";
 import { API_BASE_URL } from "../../../config/env";
+import { authFetch } from "../../../services/apiClient";
 import * as subscriptionApi from "../../../services/subscriptionApi";
 import { LoadingSpinner } from "../../../components/common/LoadingSpinner";
 import { ErrorMessage } from "../../../components/common/ErrorMessage";
@@ -25,6 +26,18 @@ type SelectedCardItem =
 
 const CATALOG_CACHE_KEY = "v1:subscription-page:anime-catalog";
 const ANIME_API_BASE = `${API_BASE_URL}/anime`;
+
+async function fetchAnimeBatch(bangumiIds: number[]): Promise<AnimeInfo[]> {
+  if (bangumiIds.length === 0) return [];
+  const response = await authFetch(`${ANIME_API_BASE}/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(bangumiIds),
+  });
+  if (!response.ok) return [];
+  const payload = (await response.json()) as { success?: boolean; data?: { animes?: AnimeInfo[] } };
+  return payload.data?.animes ?? [];
+}
 
 const SUBSCRIPTION_PAGE_TEXT = {
   zh: {
@@ -99,7 +112,7 @@ function normalizeAnimeData(
 }
 
 async function fetchAnimeEndpoint(endpoint: string): Promise<AnimeInfo[]> {
-  const response = await fetch(`${ANIME_API_BASE}${endpoint}`, { method: "GET" });
+  const response = await authFetch(`${ANIME_API_BASE}${endpoint}`);
   if (!response.ok) {
     throw new Error(`Failed to load ${endpoint}: ${response.status}`);
   }
@@ -198,14 +211,32 @@ export function MySubscriptionDownloadPage() {
 
         const animeByBangumiId = resolveAnimeByBangumi(catalog);
 
-        const mappedSubscriptions = subscriptions
-          .slice()
-          .sort((a, b) => {
-            if (a.isEnabled !== b.isEnabled) {
-              return a.isEnabled ? -1 : 1;
+        // Find subscription/manual bangumiIds not in catalog, fetch from DB
+        const allBangumiIds = new Set<number>();
+        for (const sub of subscriptions) {
+          if (sub.bangumiId > 0 && !animeByBangumiId.has(String(sub.bangumiId))) {
+            allBangumiIds.add(sub.bangumiId);
+          }
+        }
+        for (const manual of manualAnimes) {
+          if (manual.bangumiId > 0 && !animeByBangumiId.has(String(manual.bangumiId))) {
+            allBangumiIds.add(manual.bangumiId);
+          }
+        }
+
+        if (allBangumiIds.size > 0) {
+          const batchAnimes = await fetchAnimeBatch(Array.from(allBangumiIds));
+          for (const anime of batchAnimes) {
+            const key = anime.bangumi_id?.trim();
+            if (key && !animeByBangumiId.has(key)) {
+              animeByBangumiId.set(key, anime);
             }
-            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-          })
+          }
+        }
+
+        const mappedSubscriptions = subscriptions
+          .filter((s) => s.isEnabled)
+          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
           .map((subscription) => {
             const matchedAnime = animeByBangumiId.get(String(subscription.bangumiId));
             return {
@@ -288,6 +319,14 @@ export function MySubscriptionDownloadPage() {
     [manualItems, setGlobalModalOpen]
   );
 
+  const handleUnsubscribed = useCallback(() => {
+    if (!selected || selected.kind !== "subscribed") return;
+    const subId = selected.item.subscription.id;
+    setSelected(null);
+    setGlobalModalOpen(false);
+    setSubscribedItems((prev) => prev.filter((item) => item.subscription.id !== subId));
+  }, [selected, setGlobalModalOpen]);
+
   const handleCloseModal = useCallback(() => {
     setSelected(null);
     setGlobalModalOpen(false);
@@ -326,6 +365,7 @@ export function MySubscriptionDownloadPage() {
           subscription={selected.kind === "subscribed" ? selected.item.subscription : undefined}
           manualBangumiId={selected.kind === "manual" ? selected.item.manual.bangumiId : undefined}
           onClose={handleCloseModal}
+          onUnsubscribed={selected.kind === "subscribed" ? handleUnsubscribed : undefined}
         />
       )}
     </>

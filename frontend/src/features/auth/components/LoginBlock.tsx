@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppStore } from "../../../stores/useAppStores";
 import * as authApi from "../../../services/authApi";
+import { EyeOpenIcon } from "../../../components/icons/EyeOpenIcon";
+import { EyeClosedIcon } from "../../../components/icons/EyeClosedIcon";
 
 const LoginBlock = () => {
   const [username, setUsername] = useState("");
@@ -20,7 +22,7 @@ const LoginBlock = () => {
   const zh = language === "zh";
 
   const text = {
-    title: zh ? "动漫订阅" : "Anime Subscription",
+    title: "Anime-Sub",
     usernamePlaceholder: zh ? "请输入用户名" : "Enter Username",
     passwordPlaceholder: zh ? "请输入密码" : "Enter Password",
     loginButton: zh ? "登录" : "Login",
@@ -64,7 +66,7 @@ const LoginBlock = () => {
 
   return (
     <div
-      className="relative flex min-h-screen items-center justify-center p-5"
+      className="fixed inset-0 z-50 flex h-screen w-screen items-center justify-center p-5"
       style={
         bgUrl
           ? { backgroundImage: `url(${bgUrl})`, backgroundSize: "cover", backgroundPosition: "center" }
@@ -81,12 +83,7 @@ const LoginBlock = () => {
       </button>
 
       <div className="relative z-10 flex w-full max-w-[420px] flex-col items-center rounded-xl bg-white px-10 py-10 shadow-lg">
-        <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-[60px] w-[60px] items-center justify-center rounded-full bg-gray-800 text-2xl font-bold text-white">
-            A
-          </div>
-          <h2 className="m-0 text-2xl font-semibold text-gray-800">{text.title}</h2>
-        </div>
+        <h2 className="mb-8 text-2xl font-bold text-gray-900">{text.title}</h2>
 
         <input
           type="text"
@@ -109,21 +106,19 @@ const LoginBlock = () => {
           <button
             type="button"
             onClick={() => setShowPassword(!showPassword)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 border-0 bg-transparent p-1 text-gray-500 hover:text-gray-800"
+            className="group absolute right-2 top-1/2 -translate-y-1/2 !rounded-none !border-0 !bg-transparent !p-1 text-gray-600 [appearance:none] hover:!border-0 hover:!bg-transparent hover:text-gray-900 focus:!outline-none focus-visible:!outline-none"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              {showPassword ? (
-                <>
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                  <circle cx="12" cy="12" r="3" />
-                </>
-              ) : (
-                <>
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </>
-              )}
-            </svg>
+            {showPassword ? (
+              <>
+                <EyeOpenIcon className="h-4 w-4 group-hover:hidden" />
+                <EyeClosedIcon className="hidden h-4 w-4 group-hover:block" />
+              </>
+            ) : (
+              <>
+                <EyeClosedIcon className="h-4 w-4 group-hover:hidden" />
+                <EyeOpenIcon className="hidden h-4 w-4 group-hover:block" />
+              </>
+            )}
           </button>
         </div>
 
@@ -134,7 +129,7 @@ const LoginBlock = () => {
         <button
           onClick={() => void handleLogin()}
           disabled={loading}
-          className="mt-3 h-12 w-full rounded-lg bg-gray-800 text-base font-semibold text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-3 h-12 w-full rounded-lg border border-gray-300 bg-white text-base font-medium text-gray-900 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading ? text.loggingIn : text.loginButton}
         </button>

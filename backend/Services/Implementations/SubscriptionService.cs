@@ -91,6 +91,17 @@ public class SubscriptionService : ISubscriptionService
             throw new ArgumentException("Valid BangumiId is required", nameof(request.BangumiId));
         }
 
+        // Defensive: warn when SubgroupName is provided without a SubgroupId,
+        // which would cause the subscription to fall back to unfiltered RSS.
+        if (!string.IsNullOrWhiteSpace(request.SubgroupName) &&
+            string.IsNullOrWhiteSpace(request.SubgroupId))
+        {
+            _logger.LogWarning(
+                "EnsureSubscription for BangumiId {BangumiId}: SubgroupName='{SubgroupName}' provided without SubgroupId — " +
+                "subscription will use unfiltered RSS feed, relying solely on keyword filtering",
+                request.BangumiId, request.SubgroupName);
+        }
+
         var existing = await _repository.GetSubscriptionByBangumiIdAsync(request.BangumiId);
         if (existing == null)
         {
@@ -112,9 +123,14 @@ public class SubscriptionService : ISubscriptionService
         {
             existing.IsEnabled = true;
             hasChanges = true;
+
+            // Clear old download history from previous subscription period
+            await _repository.ClearDownloadHistoryAsync(existing.Id);
+            existing.DownloadCount = 0;
         }
 
-        if (string.IsNullOrWhiteSpace(existing.MikanBangumiId) && !string.IsNullOrWhiteSpace(request.MikanBangumiId))
+        if (!string.IsNullOrWhiteSpace(request.MikanBangumiId) &&
+            !string.Equals(existing.MikanBangumiId, request.MikanBangumiId, StringComparison.Ordinal))
         {
             existing.MikanBangumiId = request.MikanBangumiId.Trim();
             hasChanges = true;
@@ -125,6 +141,39 @@ public class SubscriptionService : ISubscriptionService
         {
             existing.Title = request.Title.Trim();
             hasChanges = true;
+        }
+
+        // SubgroupId: null = no change, "" = clear, "xxx" = update
+        if (request.SubgroupId != null)
+        {
+            var newValue = string.IsNullOrWhiteSpace(request.SubgroupId) ? null : request.SubgroupId.Trim();
+            if (!string.Equals(existing.SubgroupId, newValue, StringComparison.Ordinal))
+            {
+                existing.SubgroupId = newValue;
+                hasChanges = true;
+            }
+        }
+
+        // SubgroupName: null = no change, "" = clear, "xxx" = update
+        if (request.SubgroupName != null)
+        {
+            var newValue = string.IsNullOrWhiteSpace(request.SubgroupName) ? null : request.SubgroupName.Trim();
+            if (!string.Equals(existing.SubgroupName, newValue, StringComparison.Ordinal))
+            {
+                existing.SubgroupName = newValue;
+                hasChanges = true;
+            }
+        }
+
+        // KeywordInclude: null = no change, "" = clear, "xxx" = update
+        if (request.KeywordInclude != null)
+        {
+            var newValue = string.IsNullOrWhiteSpace(request.KeywordInclude) ? null : request.KeywordInclude.Trim();
+            if (!string.Equals(existing.KeywordInclude, newValue, StringComparison.Ordinal))
+            {
+                existing.KeywordInclude = newValue;
+                hasChanges = true;
+            }
         }
 
         if (hasChanges)
@@ -379,6 +428,25 @@ public class SubscriptionService : ISubscriptionService
         return history.Select(DownloadHistoryResponse.FromEntity).ToList();
     }
 
+    public async Task<List<TaskHashResponse>> GetTaskHashesAsync(int subscriptionId, int limit = 300)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var history = await _repository.GetDownloadHistoryAsync(subscriptionId, safeLimit);
+        return history.Select(TaskHashResponse.FromEntity).ToList();
+    }
+
+    public async Task<List<TaskHashResponse>> GetManualTaskHashesAsync(int bangumiId, int limit = 300)
+    {
+        if (bangumiId <= 0)
+        {
+            return new List<TaskHashResponse>();
+        }
+
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var history = await _repository.GetManualDownloadHistoryByBangumiIdAsync(bangumiId, safeLimit);
+        return history.Select(TaskHashResponse.FromEntity).ToList();
+    }
+
     public List<MikanRssItem> FilterRssItems(List<MikanRssItem> items, string? keywordInclude, string? keywordExclude)
     {
         var includeKeywords = ParseKeywords(keywordInclude);
@@ -426,8 +494,17 @@ public class SubscriptionService : ISubscriptionService
                 subscription.MikanBangumiId,
                 subscription.SubgroupId);
 
-            _logger.LogDebug("Fetched {Count} items from RSS for subscription {Id}",
-                feed.Items.Count, subscription.Id);
+            _logger.LogInformation(
+                "[Polling] Sub#{Id} '{Title}' — RSS returned {Count} items (MikanId={MikanId}, SubgroupId={SubgroupId}, KeywordInclude={KW})",
+                subscription.Id, subscription.Title, feed.Items.Count,
+                subscription.MikanBangumiId, subscription.SubgroupId ?? "(null)", subscription.KeywordInclude ?? "(null)");
+
+            if (string.IsNullOrEmpty(subscription.SubgroupId))
+            {
+                _logger.LogWarning(
+                    "[Polling] Sub#{Id} has NO SubgroupId — RSS returns ALL subgroups, relying solely on keyword filtering!",
+                    subscription.Id);
+            }
 
             // Filter by keywords
             var filteredItems = FilterRssItems(
@@ -435,10 +512,20 @@ public class SubscriptionService : ISubscriptionService
                 subscription.KeywordInclude,
                 subscription.KeywordExclude);
 
+            var skippedItems = feed.Items.Except(filteredItems).ToList();
+            if (skippedItems.Count > 0)
+            {
+                _logger.LogInformation("[Polling] Sub#{Id} — Filtered OUT {Count} items:", subscription.Id, skippedItems.Count);
+                foreach (var sk in skippedItems.Take(5))
+                    _logger.LogInformation("[Polling]   SKIP: {Title}", sk.Title);
+            }
+
+            _logger.LogInformation("[Polling] Sub#{Id} — {Count} items passed keyword filter", subscription.Id, filteredItems.Count);
+
             result.SkippedCount = feed.Items.Count - filteredItems.Count;
 
-            // Check which items are already downloaded
-            var newItems = new List<MikanRssItem>();
+            // Check which items are already downloaded (batch query instead of N+1)
+            var candidateItems = new List<MikanRssItem>();
             foreach (var item in filteredItems)
             {
                 if (string.IsNullOrEmpty(item.TorrentHash))
@@ -447,9 +534,16 @@ public class SubscriptionService : ISubscriptionService
                     result.SkippedCount++;
                     continue;
                 }
+                candidateItems.Add(item);
+            }
 
-                var exists = await _repository.ExistsDownloadByHashAsync(item.TorrentHash);
-                if (exists)
+            var candidateHashes = candidateItems.Select(i => i.TorrentHash!).ToList();
+            var existingHashes = await _repository.GetExistingHashesAsync(candidateHashes);
+
+            var newItems = new List<MikanRssItem>();
+            foreach (var item in candidateItems)
+            {
+                if (existingHashes.Contains(item.TorrentHash!))
                 {
                     result.AlreadyDownloadedCount++;
                 }
@@ -457,6 +551,13 @@ public class SubscriptionService : ISubscriptionService
                 {
                     newItems.Add(item);
                 }
+            }
+
+            if (newItems.Count > 0)
+            {
+                _logger.LogInformation("[Polling] Sub#{Id} — {Count} NEW items will be pushed to qBittorrent:", subscription.Id, newItems.Count);
+                foreach (var ni in newItems)
+                    _logger.LogInformation("[Polling]   NEW: {Title} (hash={Hash})", ni.Title, ni.TorrentHash?[..Math.Min(8, ni.TorrentHash.Length)]);
             }
 
             // Process new items
@@ -523,15 +624,25 @@ public class SubscriptionService : ISubscriptionService
 
             result.NewItemsCount = result.NewItemTitles.Count;
             result.Success = true;
-
-            // Update last checked time
-            await _repository.UpdateSubscriptionLastCheckedAsync(subscription.Id);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error checking subscription {Id}", subscription.Id);
             result.Success = false;
             result.ErrorMessage = ex.Message;
+        }
+        finally
+        {
+            // Always update LastCheckedAt so a persistently failing subscription
+            // rotates to the back of the queue instead of starving others.
+            try
+            {
+                await _repository.UpdateSubscriptionLastCheckedAsync(subscription.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to update LastCheckedAt for subscription {Id}", subscription.Id);
+            }
         }
 
         return result;

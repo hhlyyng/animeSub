@@ -101,6 +101,35 @@ public class AuthService : IAuthService
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
+    public async Task<bool> ChangeCredentialsAsync(string currentPassword, string? newPassword, string? newUsername)
+    {
+        var user = await _db.Users.FirstOrDefaultAsync();
+        if (user == null)
+        {
+            return false;
+        }
+
+        if (!BCrypt.Net.BCrypt.Verify(currentPassword, user.PasswordHash))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(newPassword))
+        {
+            user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+        }
+
+        if (!string.IsNullOrWhiteSpace(newUsername))
+        {
+            user.Username = newUsername.Trim();
+        }
+
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation("Credentials changed for user: {Username}", user.Username);
+        return true;
+    }
+
     public bool ValidateToken(string token)
     {
         var secret = _configuration["Auth:JwtSecret"];

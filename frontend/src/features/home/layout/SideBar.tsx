@@ -7,6 +7,7 @@ import DownloadIcon from "../../../components/icons/DownloadIcon";
 import { DefaultSideBar, CollapseSideBarArrow, ExpandSideBarArrow } from "../../../components/icons/SidebarIcon";
 import GithubIcon from "../../../components/icons/GithubIcon";
 import LanguageToggleIcon from "../../../components/icons/LanguageToggleIcon";
+import LogoutIcon from "../../../components/icons/LogoutIcon";
 import { useAppStore } from "../../../stores/useAppStores";
 
 type PageType = "home" | "setting" | "download";
@@ -171,25 +172,27 @@ const SideBar = ({ language, currentPage, onLanguageChange }: SideBarProps) => {
         />
       </div>
 
-      <div className="mt-auto flex w-full flex-row items-center gap-2 border-t border-[#e0e0e0] px-2 py-3">
-        <div className="relative flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-full !bg-blue-300 text-sm font-bold text-black">
+      <div className={`mt-auto flex w-full border-t-2 border-gray-300 px-3 py-3 ${isCollapsed ? "flex-col items-center gap-2" : "flex-row items-center"}`}>
+        <div className="flex shrink-0 h-10 w-10 items-center justify-center rounded-full bg-gray-200 text-sm font-bold text-gray-700">
           {(username || "U").charAt(0).toUpperCase()}
         </div>
         {showText && !isCollapsed && (
-          <div className="flex flex-1 flex-col overflow-hidden">
-            <span className="truncate text-sm font-medium text-gray-800">{username || "User"}</span>
-            <button
-              type="button"
-              onClick={() => {
-                logout();
-                navigate("/login", { replace: true });
-              }}
-              className="mt-0.5 self-start text-xs text-gray-500 hover:text-red-500"
-            >
-              {currentLanguage.logout}
-            </button>
-          </div>
+          <>
+            <span className="ml-2 flex-1 truncate text-base font-medium text-gray-800">{username || "User"}</span>
+            <div className="mx-2 h-5 w-0.5 bg-gray-400" />
+          </>
         )}
+        <button
+          type="button"
+          onClick={() => {
+            logout();
+            navigate("/login", { replace: true });
+          }}
+          className={`flex h-8 w-8 shrink-0 items-center justify-center !rounded-md !border-0 !bg-transparent !p-0 text-gray-800 transition-colors hover:!bg-gray-200 hover:text-black ${!isCollapsed ? "ml-1" : ""}`}
+          title={currentLanguage.logout}
+        >
+          <LogoutIcon className="h-5 w-5" />
+        </button>
       </div>
     </div>
   );

@@ -64,6 +64,35 @@ export async function setup(request: SetupRequest): Promise<void> {
   }
 }
 
+export async function changeCredentials(
+  currentPassword: string,
+  token: string,
+  newPassword?: string,
+  newUsername?: string,
+): Promise<void> {
+  const response = await fetch(`${AUTH_BASE}/change-credentials`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ currentPassword, newPassword, newUsername }),
+  });
+
+  if (!response.ok) {
+    let message = "Failed to update credentials";
+    try {
+      const payload = await response.json();
+      if (typeof payload?.message === "string" && payload.message.trim()) {
+        message = payload.message.trim();
+      }
+    } catch {
+      // keep default
+    }
+    throw new Error(message);
+  }
+}
+
 export function getLoginBackgroundUrl(): string {
   return `${AUTH_BASE}/background`;
 }

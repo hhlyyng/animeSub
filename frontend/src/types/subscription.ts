@@ -38,6 +38,14 @@ export interface SubscriptionDownloadHistoryItem {
   fileSizeDisplay?: string | null;
 }
 
+export interface SubscriptionTaskHash {
+  hash: string;
+  title: string;
+  publishedAt: string;
+  fileSize?: number | null;
+  isCompleted: boolean;
+}
+
 export interface ManualDownloadAnimeItem {
   bangumiId: number;
   title: string;

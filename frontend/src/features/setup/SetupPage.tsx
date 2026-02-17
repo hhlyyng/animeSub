@@ -20,7 +20,11 @@ type VerificationCheck = {
   message?: string;
 };
 
-export default function SetupPage() {
+interface SetupPageProps {
+  onSetupComplete?: () => void;
+}
+
+export default function SetupPage({ onSetupComplete }: SetupPageProps) {
   const language = useAppStore((state) => state.language);
   const setLanguage = useAppStore((state) => state.setLanguage);
   const navigate = useNavigate();
@@ -226,6 +230,7 @@ export default function SetupPage() {
           priorityOrder,
         },
       });
+      onSetupComplete?.();
       navigate("/login", { replace: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
@@ -555,7 +560,7 @@ export default function SetupPage() {
               type="button"
               onClick={() => void completeSetup()}
               disabled={submitting}
-              className="h-10 rounded-md bg-gray-800 px-5 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-50"
+              className="h-10 rounded-md border border-gray-300 bg-white px-5 text-sm font-medium text-gray-900 hover:bg-gray-50 disabled:opacity-50"
             >
               {submitting ? "..." : text.complete}
             </button>

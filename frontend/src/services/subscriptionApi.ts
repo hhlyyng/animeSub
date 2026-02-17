@@ -4,6 +4,7 @@ import type {
   ManualDownloadAnimeItem,
   SubscriptionDownloadHistoryItem,
   SubscriptionItem,
+  SubscriptionTaskHash,
 } from "../types/subscription";
 
 const API_BASE = `${API_BASE_URL}/subscription`;
@@ -33,6 +34,9 @@ export type EnsureSubscriptionRequest = {
   bangumiId: number;
   title: string;
   mikanBangumiId: string;
+  subgroupId?: string;
+  subgroupName?: string;
+  keywordInclude?: string;
 };
 
 export type CancelSubscriptionAction = "delete_files" | "keep_files";
@@ -106,6 +110,30 @@ export async function getManualDownloadAnimes(limit = 200): Promise<ManualDownlo
   const response = await authFetch(`${API_BASE}/manual-anime?${params.toString()}`);
   if (!response.ok) {
     throw new Error(await resolveApiErrorMessage(response, `Failed to get manual anime: ${response.statusText}`));
+  }
+  return response.json();
+}
+
+export async function getSubscriptionTaskHashes(
+  subscriptionId: number,
+  limit = 300
+): Promise<SubscriptionTaskHash[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const response = await authFetch(`${API_BASE}/${subscriptionId}/task-hashes?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(await resolveApiErrorMessage(response, `Failed to get task hashes: ${response.statusText}`));
+  }
+  return response.json();
+}
+
+export async function getManualAnimeTaskHashes(
+  bangumiId: number,
+  limit = 300
+): Promise<SubscriptionTaskHash[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  const response = await authFetch(`${API_BASE}/manual-anime/${bangumiId}/task-hashes?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error(await resolveApiErrorMessage(response, `Failed to get manual task hashes: ${response.statusText}`));
   }
   return response.json();
 }

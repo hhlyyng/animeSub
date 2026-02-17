@@ -18,6 +18,7 @@ public class AnimeDbContext : DbContext
     public DbSet<MikanFeedItemEntity> MikanFeedItems { get; set; }
     public DbSet<TopAnimeCacheEntity> TopAnimeCaches { get; set; }
     public DbSet<UserEntity> Users { get; set; }
+    public DbSet<MikanSubgroupEntity> MikanSubgroups { get; set; }
 
     public AnimeDbContext(DbContextOptions<AnimeDbContext> options)
         : base(options)
@@ -56,7 +57,7 @@ public class AnimeDbContext : DbContext
             entity.HasKey(e => e.Id);
 
             // Indexes for common queries
-            entity.HasIndex(e => e.BangumiId);
+            entity.HasIndex(e => e.BangumiId).IsUnique();
             entity.HasIndex(e => e.MikanBangumiId);
             entity.HasIndex(e => e.IsEnabled);
 
@@ -116,6 +117,14 @@ public class AnimeDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.Username).IsUnique();
+        });
+
+        // Configure Mikan subgroup cache
+        modelBuilder.Entity<MikanSubgroupEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.MikanBangumiId, e.SubgroupId }).IsUnique();
+            entity.HasIndex(e => e.MikanBangumiId);
         });
     }
 }

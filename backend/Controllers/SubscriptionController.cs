@@ -168,6 +168,39 @@ public class SubscriptionController : ControllerBase
     }
 
     /// <summary>
+    /// Get lightweight task hashes for a subscription (for qBittorrent correlation)
+    /// </summary>
+    [HttpGet("{id}/task-hashes")]
+    public async Task<ActionResult<List<TaskHashResponse>>> GetTaskHashes(int id, [FromQuery] int limit = 300)
+    {
+        var subscription = await _subscriptionService.GetSubscriptionByIdAsync(id);
+        if (subscription == null)
+        {
+            return NotFound(new { message = $"Subscription {id} not found" });
+        }
+
+        var hashes = await _subscriptionService.GetTaskHashesAsync(id, limit);
+        return Ok(hashes);
+    }
+
+    /// <summary>
+    /// Get lightweight task hashes for manual downloads by Bangumi ID
+    /// </summary>
+    [HttpGet("manual-anime/{bangumiId:int}/task-hashes")]
+    public async Task<ActionResult<List<TaskHashResponse>>> GetManualAnimeTaskHashes(
+        [FromRoute] int bangumiId,
+        [FromQuery] int limit = 300)
+    {
+        if (bangumiId <= 0)
+        {
+            return BadRequest(new { message = "Valid BangumiId is required" });
+        }
+
+        var hashes = await _subscriptionService.GetManualTaskHashesAsync(bangumiId, limit);
+        return Ok(hashes);
+    }
+
+    /// <summary>
     /// Get download history for a subscription
     /// </summary>
     [HttpGet("{id}/history")]

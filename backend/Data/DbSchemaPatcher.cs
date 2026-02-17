@@ -141,6 +141,48 @@ public static class DbSchemaPatcher
                 connection,
                 "CREATE UNIQUE INDEX IF NOT EXISTS IX_Users_Username ON Users(Username);",
                 cancellationToken);
+
+            // Mikan subgroup cache table
+            await ExecuteNonQueryAsync(
+                connection,
+                """
+                CREATE TABLE IF NOT EXISTS "MikanSubgroups" (
+                    "Id" INTEGER NOT NULL CONSTRAINT "PK_MikanSubgroups" PRIMARY KEY AUTOINCREMENT,
+                    "MikanBangumiId" TEXT NOT NULL,
+                    "SubgroupId" TEXT NOT NULL,
+                    "SubgroupName" TEXT NOT NULL,
+                    "UpdatedAt" TEXT NOT NULL
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS IX_MikanSubgroups_BangumiId_SubgroupId ON MikanSubgroups(MikanBangumiId, SubgroupId);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_MikanSubgroups_MikanBangumiId ON MikanSubgroups(MikanBangumiId);",
+                cancellationToken);
+
+            // Fix F: Unique constraint on Subscriptions.BangumiId
+            // First clean up any duplicate BangumiId rows (keep the one with the largest Id)
+            await ExecuteNonQueryAsync(
+                connection,
+                """
+                DELETE FROM Subscriptions
+                WHERE Id NOT IN (
+                    SELECT MAX(Id) FROM Subscriptions GROUP BY BangumiId
+                ) AND BangumiId IN (
+                    SELECT BangumiId FROM Subscriptions GROUP BY BangumiId HAVING COUNT(*) > 1
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS IX_Subscriptions_BangumiId_Unique ON Subscriptions(BangumiId);",
+                cancellationToken);
         }
         finally
         {
