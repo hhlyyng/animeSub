@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
 import { createPortal } from "react-dom";
 import toast from "react-hot-toast";
 import type { AnimeInfo } from "../../../types/anime";
 import { useAppStore } from "../../../stores/useAppStores";
-import type { MikanSeasonInfo, ParsedRssItem, TorrentInfo } from "../../../types/mikan";
+import type { MikanAnimeEntry, MikanSeasonInfo, MikanSubgroupInfo, ParsedRssItem, TorrentInfo } from "../../../types/mikan";
 import * as mikanApi from "../../../services/mikanApi";
 import * as subscriptionApi from "../../../services/subscriptionApi";
 import * as settingsApi from "../../../services/settingsApi";
@@ -18,6 +17,12 @@ import { DownloadEpisodeGroup } from "./DownloadEpisodeGroup";
 import type { DownloadActionState } from "./DownloadActionButton";
 import { LoadingSpinner } from "../../../components/common/LoadingSpinner";
 import { ErrorMessage } from "../../../components/common/ErrorMessage";
+import {
+  normalizeHash,
+  isTorrentPausedState,
+  isTorrentDownloadingState,
+  isTorrentCompletedState,
+} from "../../../utils/torrentState";
 
 type AnimeDetailModalProps = {
   anime: AnimeInfo;
@@ -53,6 +58,9 @@ type ConfirmDialogAction =
       resolution: string;
       subtitleType: string;
       bestMatchHint?: string;
+      selectedItems: ParsedRssItem[];
+      episodeRange?: string;
+      availableSubgroups: MikanSubgroupInfo[];
     }
   | { type: "unsubscribe" };
 
@@ -73,48 +81,6 @@ function getEpisodeGroupKey(group: EpisodeGroup): string {
   return `ep-${group.episode}`;
 }
 
-function normalizeTorrentState(state?: string): string {
-  return (state ?? "").toLowerCase();
-}
-
-function isTorrentPausedState(state?: string): boolean {
-  const normalized = normalizeTorrentState(state);
-  return (
-    normalized.includes("paused") ||
-    normalized.includes("stopped") ||
-    normalized.includes("stop") ||
-    normalized.includes("stalldl") ||
-    normalized.includes("queueddl") ||
-    normalized.includes("pending")
-  );
-}
-
-function isTorrentDownloadingState(state?: string): boolean {
-  const normalized = normalizeTorrentState(state);
-  return (
-    normalized.includes("downloading") ||
-    normalized.includes("forceddl") ||
-    normalized.includes("metadl") ||
-    normalized.includes("allocating") ||
-    normalized.includes("checkingdl")
-  );
-}
-
-function isTorrentCompletedState(state?: string, progress?: number): boolean {
-  if (typeof progress === "number" && progress >= 99.9) {
-    return true;
-  }
-
-  const normalized = normalizeTorrentState(state);
-  return (
-    normalized.includes("completed") ||
-    normalized.includes("uploading") ||
-    normalized.includes("forcedup") ||
-    normalized.includes("checkingup") ||
-    normalized.includes("stalledup") ||
-    normalized.includes("queuedup")
-  );
-}
 
 function parseSeasonNumber(text?: string | null): number | null {
   if (!text) return null;
@@ -240,6 +206,13 @@ function findBestPreferenceMatch(
         if (isPreferenceMatched(item, preferences, field)) {
           score += (order.length - index) * 100;
           matchedCount += 1;
+        } else if (field === "subtitleType") {
+          // Subtitle preference is set but not an exact match.
+          // Still prefer items that have *some* subtitle over items with none.
+          const actual = normalizeSubtitleFilterValue(item.subtitleType);
+          if (actual !== NO_SUBTITLE_FILTER_VALUE) {
+            score += 10;
+          }
         }
       });
 
@@ -254,6 +227,47 @@ function findBestPreferenceMatch(
     .sort((a, b) => b.score - a.score || b.matchedCount - a.matchedCount || b.publishedAt - a.publishedAt);
 
   return scored[0]?.item ?? null;
+}
+
+function selectBestItemPerEpisode(
+  items: ParsedRssItem[],
+  preferences: SubscriptionPreferenceState,
+  alreadyDownloaded: Map<string, boolean>
+): ParsedRssItem[] {
+  const episodeMap = new Map<number, ParsedRssItem[]>();
+
+  for (const item of items) {
+    if (item.isCollection) continue;
+    if (item.episode === null || item.episode <= 0) continue;
+    if (item.canDownload === false) continue;
+    const hash = normalizeHash(item.torrentHash);
+    if (hash && alreadyDownloaded.get(hash)) continue;
+
+    const ep = item.episode;
+    if (!episodeMap.has(ep)) episodeMap.set(ep, []);
+    episodeMap.get(ep)!.push(item);
+  }
+
+  const result: ParsedRssItem[] = [];
+  for (const [ep, epItems] of episodeMap) {
+    const best = findBestPreferenceMatch(epItems, preferences);
+    if (best) {
+      result.push(best);
+    } else if (epItems.length > 0) {
+      const fallback = [...epItems].sort((a, b) => (Date.parse(b.publishedAt) || 0) - (Date.parse(a.publishedAt) || 0))[0];
+      console.warn(
+        `[selectBestItemPerEpisode] EP${ep}: no preference match among ${epItems.length} candidates, using fallback:`,
+        fallback.title
+      );
+      result.push(fallback);
+    }
+  }
+
+  console.log(
+    `[selectBestItemPerEpisode] Result: ${result.length} items from ${episodeMap.size} episodes`,
+    result.map((item) => `EP${item.episode}: ${item.subgroup} / ${item.resolution} / ${item.subtitleType}`)
+  );
+  return result.sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
 }
 
 function pickSeasonByNumber(seasons: MikanSeasonInfo[], expected: number): MikanSeasonInfo[] {
@@ -319,6 +333,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const [seasons, setSeasons] = useState<MikanSeasonInfo[]>([]);
   const [selectedSeasonIndex, setSelectedSeasonIndex] = useState(0);
   const [feedItems, setFeedItems] = useState<ParsedRssItem[]>([]);
+  const [feedSubgroupMapping, setFeedSubgroupMapping] = useState<MikanSubgroupInfo[]>([]);
   const [latestEpisode, setLatestEpisode] = useState<number | null>(null);
   const [latestPublishedAt, setLatestPublishedAt] = useState<string | null>(null);
   const [downloadStatus, setDownloadStatus] = useState<Map<string, boolean>>(new Map());
@@ -337,11 +352,21 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const [subscriptionPreference, setSubscriptionPreference] = useState<SubscriptionPreferenceState>(
     DEFAULT_SUBSCRIPTION_PREFERENCE
   );
+  const [subscribeSelectedSubgroup, setSubscribeSelectedSubgroup] = useState<string>("all");
+  const [showCorrectionPanel, setShowCorrectionPanel] = useState(false);
+  const [correctionEntries, setCorrectionEntries] = useState<MikanAnimeEntry[]>([]);
+  const [correctionLoading, setCorrectionLoading] = useState(false);
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
+  const [correctionConfirm, setCorrectionConfirm] = useState<MikanAnimeEntry | null>(null);
+  const [correctionBusy, setCorrectionBusy] = useState(false);
+  const [manualMikanId, setManualMikanId] = useState("");
+  const [manualPreview, setManualPreview] = useState<{ mikanId: string; seasonName: string; itemCount: number } | null>(null);
+  const [manualPreviewError, setManualPreviewError] = useState<string | null>(null);
   const stopPollingRef = useRef<(() => void) | null>(null);
   const latestFeedRequestIdRef = useRef(0);
 
   const explicitSeasonNumber = useMemo(() => detectExplicitSeason(anime), [anime]);
-  const shouldShowSeasonSelector = explicitSeasonNumber === null && seasons.length > 1;
+  // Each anime card maps to exactly one MikanID — no multi-season selector
 
   const primaryTitle =
     language === "zh"
@@ -371,7 +396,6 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const downloadLabel = language === "zh" ? "\u4e0b\u8f7d\u6e90" : "Download Sources";
   const noDownloadLabel = language === "zh" ? "\u6682\u65e0\u53ef\u7528\u4e0b\u8f7d\u6e90" : "No download sources available";
   const latestEpisodeLabel = language === "zh" ? "\u6700\u65b0\u66f4\u65b0" : "Latest update";
-  const seasonLabel = language === "zh" ? "\u5b63\u5ea6" : "Season";
   const resolutionLabel = language === "zh" ? "\u5206\u8fa8\u7387" : "Resolution";
   const statusLabel = language === "zh" ? "\u4e0b\u8f7d\u72b6\u6001" : "Task Status";
   const statusDownloadingLabel = language === "zh" ? "\u4e0b\u8f7d\u4e2d" : "Downloading";
@@ -392,6 +416,8 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   const cancelAndDeleteLabel = language === "zh" ? "\u53d6\u8ba2\u5e76\u5220\u9664\u6587\u4ef6" : "Unsubscribe + Delete";
   const cancelAndKeepLabel = language === "zh" ? "\u53d6\u8ba2\u4f46\u4fdd\u7559\u6587\u4ef6" : "Unsubscribe + Keep";
   const rollbackLabel = language === "zh" ? "\u56de\u9000" : "Back";
+  const wrongMatchLabel = language === "zh" ? "信息检索有误？" : "Wrong match?";
+  const correctionConfirmLabel = language === "zh" ? "确认切换" : "Switch to this";
   const subscribeExpandWidthClass = language === "zh" ? "group-hover/subscribe:w-20" : "group-hover/subscribe:w-24";
   const subscribeTextExpandClass = language === "zh" ? "group-hover/subscribe:max-w-12" : "group-hover/subscribe:max-w-16";
 
@@ -418,6 +444,90 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       subscriptionPreference.subtitleType,
     ]
   );
+
+  // subscribeSelectedSubgroup stores subgroupId (or "all").
+  // Derive the display name for preference scoring and item filtering.
+  const subscribeSelectedSubgroupName = useMemo(() => {
+    if (!subscribeSelectedSubgroup || subscribeSelectedSubgroup === "all") return "all";
+    const match = feedSubgroupMapping.find((sg) => sg.subgroupId === subscribeSelectedSubgroup);
+    return match?.name ?? subscribeSelectedSubgroup;
+  }, [subscribeSelectedSubgroup, feedSubgroupMapping]);
+
+  // Dynamic subscribe dialog computations based on selected subgroup
+  const subscribeEffectivePreference = useMemo((): SubscriptionPreferenceState => ({
+    ...subscriptionPreference,
+    subgroup: subscribeSelectedSubgroupName,
+  }), [subscriptionPreference, subscribeSelectedSubgroupName]);
+
+  const subscribeDialogItems = useMemo(() => {
+    // When a specific subgroup is selected, hard-filter first so scoring
+    // on other fields (resolution / subtitle) cannot pull in a different subgroup.
+    const candidateItems =
+      subscribeSelectedSubgroupName && subscribeSelectedSubgroupName !== "all"
+        ? feedItems.filter((item) => (item.subgroup ?? "").trim() === subscribeSelectedSubgroupName)
+        : feedItems;
+    return selectBestItemPerEpisode(candidateItems, subscribeEffectivePreference, downloadStatus);
+  }, [feedItems, subscribeSelectedSubgroupName, subscribeEffectivePreference, downloadStatus]);
+
+  const subscribeDialogEpisodeRange = useMemo(() => {
+    if (subscribeDialogItems.length === 0) return undefined;
+    const episodes = subscribeDialogItems.map((item) => item.episode).filter((ep): ep is number => ep !== null);
+    if (episodes.length === 0) return undefined;
+    const minEp = Math.min(...episodes);
+    const maxEp = Math.max(...episodes);
+    return language === "zh"
+      ? `EP${minEp} ~ EP${maxEp}（共 ${episodes.length} 集）`
+      : `EP${minEp} ~ EP${maxEp} (${episodes.length} episodes)`;
+  }, [subscribeDialogItems, language]);
+
+  // Best match hint: always based on original preference (not overridden subgroup)
+  const subscribeDialogSourceHint = useMemo(() => {
+    const bestItems = selectBestItemPerEpisode(feedItems, subscriptionPreference, downloadStatus);
+    if (bestItems.length === 0) return undefined;
+    const representative = bestItems[0];
+    const subgroupText = resolvePreferenceDisplayValue(
+      representative.subgroup?.trim() || "all",
+      noPreferenceLabel,
+      noSubtitleLabel
+    );
+    const resolutionText = resolvePreferenceDisplayValue(
+      representative.resolution?.trim() || "all",
+      noPreferenceLabel,
+      noSubtitleLabel
+    );
+    const subtitleText = resolvePreferenceDisplayValue(
+      normalizeSubtitleFilterValue(representative.subtitleType),
+      noPreferenceLabel,
+      noSubtitleLabel
+    );
+    const label = language === "zh" ? "最佳匹配片源" : "Best match";
+    return `${label}：${subgroupText} / ${resolutionText} / ${subtitleText}`;
+  }, [feedItems, subscriptionPreference, downloadStatus, language, noPreferenceLabel, noSubtitleLabel]);
+
+  // Current source hint: only shown when user selected a different subgroup
+  const subscribeDialogCurrentHint = useMemo(() => {
+    const isDefaultSelection = subscribeSelectedSubgroup === (subscriptionPreference.subgroup || "all");
+    if (isDefaultSelection) return undefined;
+    if (subscribeDialogItems.length === 0) return undefined;
+    const representative = subscribeDialogItems[0];
+    const subgroupText = resolvePreferenceDisplayValue(
+      representative.subgroup?.trim() || "all",
+      noPreferenceLabel,
+      noSubtitleLabel
+    );
+    const resolutionText = resolvePreferenceDisplayValue(
+      representative.resolution?.trim() || "all",
+      noPreferenceLabel,
+      noSubtitleLabel
+    );
+    const subtitleText = resolvePreferenceDisplayValue(
+      normalizeSubtitleFilterValue(representative.subtitleType),
+      noPreferenceLabel,
+      noSubtitleLabel
+    );
+    const label = language === "zh" ? "当前片源" : "Current source";
+    return `${label}：${subgroupText} / ${resolutionText} / ${subtitleText}`;
+  }, [subscribeDialogItems, subscribeSelectedSubgroup, subscriptionPreference.subgroup, language, noPreferenceLabel, noSubtitleLabel]);
 
   const loadSeasons = useCallback(async () => {
     let shouldKeepLoadingForFeed = false;
@@ -452,23 +562,20 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         return;
       }
 
-      let finalSeasons = result.seasons;
-      let finalIndex = Math.min(Math.max(result.defaultSeason ?? 0, 0), result.seasons.length - 1);
+      // Always pick exactly one season: explicit match > defaultSeason > first
+      const bestIndex = Math.min(Math.max(result.defaultSeason ?? 0, 0), result.seasons.length - 1);
+      let picked = result.seasons[bestIndex];
 
       if (explicitSeasonNumber !== null) {
         const matched = pickSeasonByNumber(result.seasons, explicitSeasonNumber);
         if (matched.length > 0) {
-          finalSeasons = [matched[0]];
-          finalIndex = 0;
-        } else {
-          finalSeasons = [result.seasons[finalIndex]];
-          finalIndex = 0;
+          picked = matched[0];
         }
       }
 
-      setSeasons(finalSeasons);
-      setSelectedSeasonIndex(finalIndex);
-      shouldKeepLoadingForFeed = finalSeasons.length > 0;
+      setSeasons([picked]);
+      setSelectedSeasonIndex(0);
+      shouldKeepLoadingForFeed = picked != null;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to search";
       setError(errorMessage);
@@ -497,6 +604,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       }
 
       setFeedItems(feed.items);
+      setFeedSubgroupMapping(feed.subgroupMapping ?? []);
       setLatestEpisode(feed.latestEpisode ?? null);
       setLatestPublishedAt(feed.latestPublishedAt ?? null);
       setCollapsedGroupKeys(new Set());
@@ -641,7 +749,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   ]);
 
   const resolveItemTaskStatus = useCallback((item: ParsedRssItem): "idle" | "downloading" | "completed" => {
-    const hash = item.torrentHash?.trim().toUpperCase() ?? "";
+    const hash = normalizeHash(item.torrentHash);
     if (!hash) {
       return "idle";
     }
@@ -716,7 +824,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   }, []);
 
   const applyStateOverride = useCallback((hash: string, state: PendingStateOverride["state"]) => {
-    const normalizedHash = hash.trim().toUpperCase();
+    const normalizedHash = normalizeHash(hash);
     if (!normalizedHash) return;
 
     setStateOverrides((prev) => {
@@ -730,7 +838,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   }, []);
 
   const markTorrentState = useCallback((hash: string, patch: Partial<TorrentInfo>) => {
-    const normalizedHash = hash.trim().toUpperCase();
+    const normalizedHash = normalizeHash(hash);
     if (!normalizedHash) return;
 
     setTorrentInfo((prev) => {
@@ -750,7 +858,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       }
 
       try {
-        const requestHash = item.torrentHash?.trim().toUpperCase() ?? "";
+        const requestHash = normalizeHash(item.torrentHash);
         const parsedBangumiId = Number.parseInt(anime.bangumi_id, 10);
         if (requestHash.length > 0) {
           setBusyHash(requestHash);
@@ -766,7 +874,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
           mikanBangumiId: anime.mikan_bangumi_id,
           animeTitle: anime.ch_title || anime.en_title || anime.jp_title,
         });
-        const effectiveHash = qbHash.trim().toUpperCase();
+        const effectiveHash = normalizeHash(qbHash);
         if (effectiveHash.length === 0) {
           throw new Error("Missing normalized hash from backend response");
         }
@@ -804,7 +912,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   );
 
   const handlePause = useCallback(async (hash: string) => {
-    const normalizedHash = hash.trim().toUpperCase();
+    const normalizedHash = normalizeHash(hash);
     try {
       setBusyHash(normalizedHash);
       await mikanApi.pauseTorrent(normalizedHash);
@@ -820,7 +928,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   }, [applyStateOverride, language, markTorrentState]);
 
   const handleResume = useCallback(async (hash: string) => {
-    const normalizedHash = hash.trim().toUpperCase();
+    const normalizedHash = normalizeHash(hash);
     try {
       setBusyHash(normalizedHash);
       await mikanApi.resumeTorrent(normalizedHash);
@@ -836,7 +944,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   }, [applyStateOverride, language, markTorrentState]);
 
   const executeRemove = useCallback(async (hash: string) => {
-    const normalizedHash = hash.trim().toUpperCase();
+    const normalizedHash = normalizeHash(hash);
     try {
       setBusyHash(normalizedHash);
       await mikanApi.removeTorrent(normalizedHash, false);
@@ -878,22 +986,161 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
   }, [language]);
 
   const requestRemove = useCallback(async (hash: string, title: string) => {
-    const normalizedHash = hash.trim().toUpperCase();
+    const normalizedHash = normalizeHash(hash);
     if (!normalizedHash) {
       return;
     }
     setConfirmDialog({ type: "remove", hash: normalizedHash, title });
   }, []);
 
-  const handleSeasonChange = (event: ChangeEvent<HTMLSelectElement>) => {
-    setSelectedSeasonIndex(Number.parseInt(event.target.value, 10));
-  };
+  const handleCorrectionOpen = useCallback(async () => {
+    if (showCorrectionPanel) {
+      setShowCorrectionPanel(false);
+      return;
+    }
+
+    setShowCorrectionPanel(true);
+    setCorrectionLoading(true);
+    setCorrectionError(null);
+    setCorrectionEntries([]);
+    setCorrectionConfirm(null);
+    setManualMikanId("");
+    setManualPreview(null);
+    setManualPreviewError(null);
+
+    const searchTitle = anime.ch_title || anime.en_title || anime.jp_title;
+    if (!searchTitle) {
+      setCorrectionError(language === "zh" ? "没有可搜索的标题" : "No title available for search");
+      setCorrectionLoading(false);
+      return;
+    }
+
+    try {
+      const entries = await mikanApi.searchMikanEntries(searchTitle);
+      setCorrectionEntries(entries);
+      if (entries.length === 0) {
+        setCorrectionError(language === "zh" ? "未找到匹配结果" : "No matching results found");
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Search failed";
+      setCorrectionError(msg);
+    } finally {
+      setCorrectionLoading(false);
+    }
+  }, [showCorrectionPanel, anime.ch_title, anime.en_title, anime.jp_title, language]);
+
+  /** Patch anime.mikan_bangumi_id in-memory and in sessionStorage so reopening the modal uses the corrected ID */
+  const patchAnimeMikanId = useCallback((newMikanId: string) => {
+    anime.mikan_bangumi_id = newMikanId;
+    const cacheKeys = ["v3:todayAnimes", "v3:bangumiTop10", "v3:anilistTop10", "v3:malTop10"];
+    for (const key of cacheKeys) {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const list: AnimeInfo[] = JSON.parse(raw);
+        const target = list.find((a) => a.bangumi_id === anime.bangumi_id);
+        if (target) {
+          target.mikan_bangumi_id = newMikanId;
+          sessionStorage.setItem(key, JSON.stringify(list));
+        }
+      } catch { /* ignore corrupt cache */ }
+    }
+  }, [anime]);
+
+  const handleCorrectionSelect = useCallback(async (entry: MikanAnimeEntry) => {
+    setCorrectionBusy(true);
+    try {
+      // Persist correction to DB if we have a valid numeric BangumiId
+      const bangumiId = Number.parseInt(anime.bangumi_id, 10);
+      if (Number.isFinite(bangumiId) && bangumiId > 0) {
+        await mikanApi.correctMikanBangumiId(bangumiId, entry.mikanBangumiId);
+      }
+      patchAnimeMikanId(entry.mikanBangumiId);
+      // Update local seasons state to trigger feed reload
+      setSeasons([
+        {
+          seasonName: entry.title,
+          mikanBangumiId: entry.mikanBangumiId,
+          year: 0,
+          seasonNumber: undefined,
+        },
+      ]);
+      setSelectedSeasonIndex(0);
+      setShowCorrectionPanel(false);
+      setCorrectionConfirm(null);
+      toast.success(language === "zh" ? "已切换下载源" : "Download source corrected");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save correction";
+      toast.error(language === "zh" ? `修正失败: ${msg}` : `Correction failed: ${msg}`);
+    } finally {
+      setCorrectionBusy(false);
+    }
+  }, [anime.bangumi_id, language, patchAnimeMikanId]);
+
+  const handleManualMikanIdSearch = useCallback(async () => {
+    const trimmed = manualMikanId.trim();
+    if (!trimmed) return;
+
+    setCorrectionBusy(true);
+    setManualPreview(null);
+    setManualPreviewError(null);
+    try {
+      const feed = await mikanApi.getMikanFeed(trimmed);
+      if (feed.items.length === 0 && !feed.seasonName) {
+        setManualPreviewError(language === "zh" ? "该 ID 未找到有效资源" : "No valid resources found for this ID");
+      } else {
+        setManualPreview({
+          mikanId: trimmed,
+          seasonName: feed.seasonName || trimmed,
+          itemCount: feed.items.length,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Fetch failed";
+      setManualPreviewError(language === "zh" ? `获取失败: ${msg}` : `Fetch failed: ${msg}`);
+    } finally {
+      setCorrectionBusy(false);
+    }
+  }, [manualMikanId, language]);
+
+  const handleManualMikanIdConfirm = useCallback(async () => {
+    if (!manualPreview) return;
+
+    setCorrectionBusy(true);
+    try {
+      // Persist correction to DB if we have a valid numeric BangumiId
+      const bangumiId = Number.parseInt(anime.bangumi_id, 10);
+      if (Number.isFinite(bangumiId) && bangumiId > 0) {
+        await mikanApi.correctMikanBangumiId(bangumiId, manualPreview.mikanId);
+      }
+      patchAnimeMikanId(manualPreview.mikanId);
+      setSeasons([
+        {
+          seasonName: manualPreview.seasonName,
+          mikanBangumiId: manualPreview.mikanId,
+          year: 0,
+          seasonNumber: undefined,
+        },
+      ]);
+      setSelectedSeasonIndex(0);
+      setShowCorrectionPanel(false);
+      setCorrectionConfirm(null);
+      setManualMikanId("");
+      setManualPreview(null);
+      toast.success(language === "zh" ? "已切换下载源" : "Download source corrected");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save";
+      toast.error(language === "zh" ? `修正失败: ${msg}` : `Correction failed: ${msg}`);
+    } finally {
+      setCorrectionBusy(false);
+    }
+  }, [manualPreview, anime.bangumi_id, language, patchAnimeMikanId]);
 
   const handlePreferenceChange = (key: keyof typeof downloadPreferences, value: string) => {
     setDownloadPreferences({ [key]: value });
   };
 
-  const executeSubscribe = useCallback(async () => {
+  const executeSubscribe = useCallback(async (itemsToDownload: ParsedRssItem[], selectedSubgroupId?: string) => {
     const bangumiId = Number.parseInt(anime.bangumi_id, 10);
     if (!Number.isFinite(bangumiId) || bangumiId <= 0) {
       toast.error(language === "zh" ? "\u7f3a\u5c11\u6709\u6548 BangumiId\uff0c\u65e0\u6cd5\u8ba2\u9605" : "Missing valid BangumiId");
@@ -911,15 +1158,144 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
     try {
       setIsSubscribeBusy(true);
+
+      // Step 1: Create subscription — subgroupId comes directly from the dropdown selection
+      const effectiveSubgroupId = selectedSubgroupId && selectedSubgroupId !== "all" ? selectedSubgroupId : undefined;
+      const effectiveSubgroupName = effectiveSubgroupId
+        ? feedSubgroupMapping.find((sg) => sg.subgroupId === effectiveSubgroupId)?.name
+        : undefined;
+
+      // Build keywordInclude from the actual items being downloaded.
+      // FilterRssItems requires ALL keywords to match against the raw RSS title (AND logic).
+      // We extract keywords directly from a representative raw title to ensure substring matching works.
+      const keywordParts: string[] = [];
+      // Always include subgroup name as keyword for defense-in-depth filtering.
+      // Even when SubgroupId is set (server-side RSS filter), the subgroup name in the
+      // torrent title acts as a second layer of verification.
+      if (effectiveSubgroupName) {
+        keywordParts.push(effectiveSubgroupName);
+      }
+      if (itemsToDownload.length > 0) {
+        const representative = itemsToDownload[0];
+        // Resolution (e.g., "1080p") - matches raw title directly
+        if (representative.resolution?.trim()) {
+          keywordParts.push(representative.resolution.trim());
+        }
+        // Subtitle type: use raw title extraction since parsed value may differ from raw text
+        // e.g., parsed "简繁内封" vs raw "简繁日内封"
+        if (representative.subtitleType?.trim()) {
+          const rawTitle = representative.title;
+          const subtitleInBracket = rawTitle.match(/[\[【]([^\]】]*(?:简日|繁日|简繁|简体|繁体)[^\]】]*(?:内封|内嵌|外挂)[^\]】]*)[\]】]/);
+          if (subtitleInBracket) {
+            keywordParts.push(subtitleInBracket[1].trim());
+          } else {
+            keywordParts.push(representative.subtitleType.trim());
+          }
+        }
+      }
+
       const ensured = await subscriptionApi.ensureSubscription({
         bangumiId,
         title: anime.ch_title || anime.en_title || anime.jp_title || "Unknown Title",
         mikanBangumiId: subscribeMikanBangumiId,
+        // Pass subgroupId directly — undefined means "don't modify existing value"
+        subgroupId: effectiveSubgroupId,
+        subgroupName: effectiveSubgroupName,
+        keywordInclude: keywordParts.length > 0 ? keywordParts.join(",") : "",
       });
 
       setIsSubscribed(Boolean(ensured.isEnabled));
       setCurrentSubscriptionId(ensured.id);
       toast.success(language === "zh" ? "\u8ba2\u9605\u6210\u529f" : "Subscribed");
+
+      // Step 2: Batch download selected episodes
+      if (itemsToDownload.length > 0) {
+        const total = itemsToDownload.length;
+        console.log(
+          `[Subscribe] Pushing ${total} items to qBittorrent:`,
+          itemsToDownload.map((item) => ({
+            ep: item.episode,
+            title: item.title,
+            subgroup: item.subgroup,
+            resolution: item.resolution,
+            subtitleType: item.subtitleType,
+            hash: item.torrentHash?.slice(0, 8),
+          }))
+        );
+        toast(
+          language === "zh"
+            ? `\u5f00\u59cb\u4e0b\u8f7d ${total} \u96c6...`
+            : `Starting download of ${total} episodes...`,
+          { icon: "\u23ec" }
+        );
+
+        let successCount = 0;
+        let failCount = 0;
+
+        for (const item of itemsToDownload) {
+          try {
+            const requestHash = normalizeHash(item.torrentHash);
+            const parsedBangumiId = Number.parseInt(anime.bangumi_id, 10);
+
+            const qbHash = await mikanApi.downloadTorrent({
+              magnetLink: item.magnetLink,
+              torrentUrl: item.torrentUrl,
+              title: item.title,
+              torrentHash: requestHash,
+              bangumiId: Number.isFinite(parsedBangumiId) && parsedBangumiId > 0 ? parsedBangumiId : undefined,
+              mikanBangumiId: subscribeMikanBangumiId,
+              animeTitle: anime.ch_title || anime.en_title || anime.jp_title,
+              subscriptionId: ensured.id,
+            });
+
+            const effectiveHash = normalizeHash(qbHash);
+            if (effectiveHash.length > 0) {
+              setDownloadStatus((prev) => {
+                const next = new Map(prev);
+                next.set(effectiveHash, true);
+                return next;
+              });
+              setTorrentInfo((prev) => {
+                if (prev.has(effectiveHash)) return prev;
+                const next = new Map(prev);
+                next.set(effectiveHash, {
+                  hash: effectiveHash,
+                  name: item.title,
+                  size: 0,
+                  state: "downloading",
+                  progress: 0,
+                });
+                return next;
+              });
+              applyStateOverride(effectiveHash, "downloading");
+            }
+
+            successCount++;
+          } catch {
+            failCount++;
+          }
+
+          // Small delay between downloads to avoid overwhelming qBittorrent
+          if (itemsToDownload.indexOf(item) < itemsToDownload.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+        }
+
+        if (failCount === 0) {
+          toast.success(
+            language === "zh"
+              ? `\u5168\u90e8 ${successCount} \u96c6\u5df2\u63a8\u9001\u4e0b\u8f7d`
+              : `All ${successCount} episodes queued`
+          );
+        } else {
+          toast(
+            language === "zh"
+              ? `\u4e0b\u8f7d\u5b8c\u6210\uff1a\u6210\u529f ${successCount} \u96c6\uff0c\u5931\u8d25 ${failCount} \u96c6`
+              : `Done: ${successCount} success, ${failCount} failed`,
+            { icon: "\u26a0\ufe0f" }
+          );
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to subscribe";
       toast.error(language === "zh" ? `\u8ba2\u9605\u5931\u8d25: ${message}` : `Subscribe failed: ${message}`);
@@ -931,6 +1307,8 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     anime.ch_title,
     anime.en_title,
     anime.jp_title,
+    applyStateOverride,
+    feedSubgroupMapping,
     isSubscribeBusy,
     language,
     subscribeMikanBangumiId,
@@ -981,45 +1359,16 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       return;
     }
 
-    const priorityOrder =
-      subscriptionPreference.priorityOrder.length > 0
-        ? subscriptionPreference.priorityOrder
-        : DEFAULT_SUBSCRIPTION_PREFERENCE.priorityOrder;
+    // Use feedSubgroupMapping (from Mikan page scrape) as subgroup source —
+    // it provides both subgroupId and display name, avoiding name-based reverse lookup.
+    const availableSubgroups = feedSubgroupMapping;
 
-    const hasActivePreferences = priorityOrder.some((field) => {
-      const value = normalizePreferenceCompareValue(subscriptionPreference[field]);
-      return value.length > 0 && value !== "all";
-    });
-
-    const hasExactMatch =
-      !hasActivePreferences ||
-      feedItems.some((item) => priorityOrder.every((field) => isPreferenceMatched(item, subscriptionPreference, field)));
-
-    let bestMatchHint: string | undefined;
-    if (hasActivePreferences && !hasExactMatch) {
-      const bestMatch = findBestPreferenceMatch(feedItems, subscriptionPreference);
-      if (bestMatch) {
-        const subgroupText = resolvePreferenceDisplayValue(
-          bestMatch.subgroup?.trim() || "all",
-          noPreferenceLabel,
-          noSubtitleLabel
-        );
-        const resolutionText = resolvePreferenceDisplayValue(
-          bestMatch.resolution?.trim() || "all",
-          noPreferenceLabel,
-          noSubtitleLabel
-        );
-        const subtitleText = resolvePreferenceDisplayValue(
-          normalizeSubtitleFilterValue(bestMatch.subtitleType),
-          noPreferenceLabel,
-          noSubtitleLabel
-        );
-        bestMatchHint =
-          language === "zh"
-            ? `当前最接近偏好的片源：${subgroupText} / ${resolutionText} / ${subtitleText}`
-            : `Closest available source: ${subgroupText} / ${resolutionText} / ${subtitleText}`;
-      }
-    }
+    // Initialize selected subgroup: try to find matching subgroupId from preference name
+    const prefName = subscriptionPreference.subgroup || "all";
+    const matchedPref = prefName !== "all"
+      ? feedSubgroupMapping.find((sg) => sg.name.trim().toLowerCase() === prefName.trim().toLowerCase())
+      : undefined;
+    setSubscribeSelectedSubgroup(matchedPref?.subgroupId ?? "all");
 
     setConfirmDialog({
       type: "subscribe",
@@ -1027,7 +1376,10 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       subgroup: subscribePreferencePreview.subgroup,
       resolution: subscribePreferencePreview.resolution,
       subtitleType: subscribePreferencePreview.subtitleType,
-      bestMatchHint,
+      bestMatchHint: undefined,
+      selectedItems: [],
+      episodeRange: undefined,
+      availableSubgroups,
     });
   }, [
     anime.bangumi_id,
@@ -1037,9 +1389,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
     isSubscribed,
     isSubscribeBusy,
     language,
-    feedItems,
-    noPreferenceLabel,
-    noSubtitleLabel,
+    feedSubgroupMapping,
     subscriptionPreference,
     subscribeMikanBangumiId,
     subscribePreferencePreview.resolution,
@@ -1052,6 +1402,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       return;
     }
     setConfirmDialog(null);
+    setSubscribeSelectedSubgroup("all");
   }, [confirmBusy]);
 
   const confirmDialogAction = useCallback(async () => {
@@ -1065,14 +1416,14 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         await executeDownload(confirmDialog.item);
       } else if (confirmDialog.type === "remove") {
         await executeRemove(confirmDialog.hash);
-      } else {
-        await executeSubscribe();
+      } else if (confirmDialog.type === "subscribe") {
+        await executeSubscribe(subscribeDialogItems, subscribeSelectedSubgroup);
       }
       setConfirmDialog(null);
     } finally {
       setConfirmBusy(false);
     }
-  }, [confirmBusy, confirmDialog, executeDownload, executeRemove, executeSubscribe]);
+  }, [confirmBusy, confirmDialog, executeDownload, executeRemove, executeSubscribe, subscribeDialogItems, subscribeSelectedSubgroup]);
 
   const confirmUnsubscribeAction = useCallback(async (action: CancelSubscriptionAction) => {
     if (!confirmDialog || confirmDialog.type !== "unsubscribe" || confirmBusy) {
@@ -1109,6 +1460,13 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
       setCurrentSubscriptionId(null);
       setIsSubscribeBusy(false);
       setSubscriptionPreference(DEFAULT_SUBSCRIPTION_PREFERENCE);
+      setSubscribeSelectedSubgroup("all");
+      setShowCorrectionPanel(false);
+      setCorrectionEntries([]);
+      setCorrectionLoading(false);
+      setCorrectionError(null);
+      setCorrectionConfirm(null);
+      setCorrectionBusy(false);
     }
   }, [open]);
 
@@ -1254,8 +1612,8 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
         : confirmDialog.type === "subscribe"
           ? (
             language === "zh"
-              ? `\u786e\u8ba4\u8ba2\u9605${confirmDialog.title}\uff1f\u8ba2\u9605\u540e\u5c06\u6309\u7167\u60a8\u5728\u8bbe\u7f6e\u4e2d\u7684\u9884\u8bbe\u7247\u6e90\u504f\u597d\u8fdb\u884c\u4e0b\u8f7d\u3002\u5f53\u524d\u504f\u597d\u4e3a\uff1a${confirmDialog.subgroup}\uff0c${confirmDialog.resolution}\uff0c${confirmDialog.subtitleType}\u3002\u82e5\u65e0\u6700\u4f73\u5339\u914d\uff0c\u5219\u6309\u504f\u597d\u987a\u5e8f\u8fdb\u884c\u5339\u914d\u4e0b\u8f7d\u3002\u8fd9\u4e9b\u529f\u80fd\u76ee\u524d\u4ecd\u5728\u5b8c\u5584\u4e2d\uff0c\u540e\u7eed\u4f1a\u5728\u8bbe\u7f6e\u9875\u63d0\u4f9b\u5b8c\u6574\u914d\u7f6e\u3002${confirmDialog.bestMatchHint ? `\n${confirmDialog.bestMatchHint}` : ""}`
-              : `Confirm subscription for "${confirmDialog.title}"? Downloads will follow your preset source preferences in Settings. Current preference: ${confirmDialog.subgroup}, ${confirmDialog.resolution}, ${confirmDialog.subtitleType}. If no best match is found, fallback matching will follow your preference order. This flow is still being completed and will be fully configurable in Settings.${confirmDialog.bestMatchHint ? `\n${confirmDialog.bestMatchHint}` : ""}`
+              ? `\u786e\u8ba4\u8ba2\u9605\u300c${confirmDialog.title}\u300d\uff1f`
+              : `Subscribe to "${confirmDialog.title}"?`
           )
           : (
             language === "zh"
@@ -1289,16 +1647,18 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
             disabled={isSubscribeBusy || confirmBusy}
           >
             <span
-              className={`relative inline-flex h-8 w-8 items-center justify-center gap-0 overflow-hidden rounded-md bg-transparent text-gray-600 transition-all duration-200 ${subscribeExpandWidthClass} group-hover/subscribe:gap-1`}
+              className={`inline-flex h-8 items-center justify-center gap-0 overflow-hidden rounded-md bg-transparent text-gray-600 transition-all duration-200 w-8 ${subscribeExpandWidthClass} group-hover/subscribe:gap-1`}
             >
               {!isSubscribed && (
                 <BellIcon className="h-5 w-5 shrink-0 transition-colors duration-200 group-hover/subscribe:text-black" />
               )}
               {isSubscribed && (
                 <>
-                  <CheckIcon className="h-5 w-5 shrink-0 text-green-600 transition-opacity duration-200 group-hover/subscribe:opacity-0" />
-                  <span className="absolute inset-0 inline-flex items-center justify-center opacity-0 transition-opacity duration-200 group-hover/subscribe:opacity-100">
-                    <CloseIcon className="h-5 w-5 shrink-0" />
+                  <span className="inline-flex shrink-0 items-center justify-center transition-all duration-200 w-5 group-hover/subscribe:w-0 group-hover/subscribe:overflow-hidden">
+                    <CheckIcon className="h-5 w-5 text-green-600" />
+                  </span>
+                  <span className="inline-flex shrink-0 items-center justify-center transition-all duration-200 w-0 overflow-hidden group-hover/subscribe:w-5">
+                    <CloseIcon className="h-5 w-5" />
                   </span>
                 </>
               )}
@@ -1398,7 +1758,16 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
 
           <div className="border-t border-gray-200 p-6 bg-gray-50">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-gray-900">{downloadLabel}</h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-bold text-gray-900">{downloadLabel}</h3>
+                <button
+                  type="button"
+                  onClick={() => void handleCorrectionOpen()}
+                  className="text-[10px] text-gray-500 hover:text-gray-600 transition-colors whitespace-nowrap leading-none"
+                >
+                  {wrongMatchLabel}
+                </button>
+              </div>
               {latestText && (
                 <p className="text-sm text-gray-600">
                   {latestEpisodeLabel}: <span className="font-semibold text-gray-800">{latestText}</span>
@@ -1406,25 +1775,146 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
               )}
             </div>
 
-            {loading && <LoadingSpinner />}
-            {error && <ErrorMessage message={error} />}
+            {showCorrectionPanel && (
+              <div className="mb-4 p-3 bg-white border border-gray-200 rounded-lg">
+                {correctionLoading && <LoadingSpinner />}
+                {correctionError && !correctionLoading && (
+                  <p className="text-sm text-gray-600 mb-2">{correctionError}</p>
+                )}
+                {!correctionLoading && !correctionError && correctionEntries.length > 0 && (
+                  <div className="flex gap-4 overflow-x-auto pb-2">
+                    {correctionEntries.map((entry) => (
+                      <div
+                        key={entry.mikanBangumiId}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => !correctionBusy && setCorrectionConfirm(entry)}
+                        onKeyDown={(e) => { if (e.key === "Enter" && !correctionBusy) setCorrectionConfirm(entry); }}
+                        className={`flex-shrink-0 w-[8.5rem] rounded-md border border-gray-200 hover:border-blue-400 overflow-hidden group/correction cursor-pointer transition-colors ${correctionBusy ? "opacity-60 cursor-not-allowed" : ""}`}
+                      >
+                        <div className="w-full h-44 bg-gray-100">
+                          {entry.imageUrl ? (
+                            <img
+                              src={entry.imageUrl}
+                              alt={entry.title}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">
+                              N/A
+                            </div>
+                          )}
+                        </div>
+                        <p className="w-full px-2 py-1 text-sm text-gray-700 leading-tight text-left break-words [overflow-wrap:anywhere] group-hover/correction:text-blue-600 transition-colors" title={entry.title}>
+                          {entry.title}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
-            {!loading && !error && shouldShowSeasonSelector && (
-              <div className="mb-4">
-                <label className="text-sm font-medium text-gray-700">{seasonLabel}</label>
-                <select
-                  value={selectedSeasonIndex}
-                  onChange={handleSeasonChange}
-                  className="mt-1 block w-full rounded-md border-gray-300 py-2 px-3 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                >
-                  {seasons.map((season, index) => (
-                    <option key={`${season.mikanBangumiId}-${index}`} value={index}>
-                      {season.seasonName} {season.year ? `(${season.year})` : ""}
-                    </option>
-                  ))}
-                </select>
+                {correctionConfirm && (
+                  <div className="mt-3 flex items-center justify-between bg-gray-50 rounded-md p-2">
+                    <p className="text-sm text-gray-700">
+                      {language === "zh"
+                        ? `确认切换到「${correctionConfirm.title}」？`
+                        : `Switch to "${correctionConfirm.title}"?`}
+                    </p>
+                    <div className="flex gap-2 ml-2 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setCorrectionConfirm(null)}
+                        disabled={correctionBusy}
+                        className="px-2 py-1 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-60"
+                      >
+                        {cancelLabel}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleCorrectionSelect(correctionConfirm)}
+                        disabled={correctionBusy}
+                        className="px-2 py-1 text-xs text-gray-900 bg-transparent border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-60"
+                      >
+                        {correctionBusy
+                          ? (language === "zh" ? "处理中..." : "Processing...")
+                          : correctionConfirmLabel}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {!correctionLoading && (
+                  <div className={`${correctionEntries.length > 0 || correctionConfirm ? "mt-3 pt-3 border-t border-gray-100" : ""}`}>
+                    <p className="text-xs text-gray-600 mb-1.5">
+                      {language === "zh"
+                        ? "或直接输入 Mikan 番组 ID（可从 Mikan 网站 URL 获取，如 /Home/Bangumi/3503 中的 3503）"
+                        : "Or enter Mikan Bangumi ID directly (from URL e.g. /Home/Bangumi/3503 → 3503)"}
+                    </p>
+                    <div className="flex gap-2 items-center">
+                      <input
+                        type="text"
+                        value={manualMikanId}
+                        onChange={(e) => { setManualMikanId(e.target.value); setManualPreview(null); setManualPreviewError(null); }}
+                        onKeyDown={(e) => { if (e.key === "Enter" && manualMikanId.trim() && !manualPreview) void handleManualMikanIdSearch(); }}
+                        placeholder={language === "zh" ? "输入 Mikan ID，如 3503" : "Mikan ID, e.g. 3503"}
+                        disabled={correctionBusy}
+                        className="flex-1 px-2.5 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-blue-400 focus:border-blue-400 disabled:opacity-60"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void handleManualMikanIdSearch()}
+                        disabled={correctionBusy || !manualMikanId.trim() || !!manualPreview}
+                        className="px-3 py-1.5 text-xs text-gray-900 bg-transparent border border-gray-300 rounded-md hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+                      >
+                        {correctionBusy && !manualPreview
+                          ? (language === "zh" ? "搜索中..." : "Searching...")
+                          : (language === "zh" ? "搜索" : "Search")}
+                      </button>
+                    </div>
+
+                    {manualPreviewError && (
+                      <p className="mt-2 text-sm text-red-500">{manualPreviewError}</p>
+                    )}
+
+                    {manualPreview && (
+                      <div className="mt-2 flex items-center justify-between bg-gray-50 rounded-md p-2.5">
+                        <div className="text-sm text-gray-700 min-w-0">
+                          <p className="font-medium truncate">{manualPreview.seasonName}</p>
+                          <p className="text-xs text-gray-500">
+                            {language === "zh"
+                              ? `共 ${manualPreview.itemCount} 条资源`
+                              : `${manualPreview.itemCount} items found`}
+                          </p>
+                        </div>
+                        <div className="flex gap-2 ml-3 flex-shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => { setManualPreview(null); setManualPreviewError(null); }}
+                            disabled={correctionBusy}
+                            className="px-2 py-1 text-xs text-gray-600 border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-60"
+                          >
+                            {language === "zh" ? "不对" : "Wrong"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleManualMikanIdConfirm()}
+                            disabled={correctionBusy}
+                            className="px-2 py-1 text-xs text-gray-900 bg-transparent border border-gray-300 rounded hover:bg-gray-100 disabled:opacity-60"
+                          >
+                            {correctionBusy
+                              ? (language === "zh" ? "处理中..." : "Processing...")
+                              : (language === "zh" ? "确认切换" : "Confirm")}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
+
+            {loading && <LoadingSpinner />}
+            {error && <ErrorMessage message={error} />}
 
             {!loading && !error && feedItems.length > 0 && (
               <div className="flex gap-3 mb-4 flex-wrap">
@@ -1535,7 +2025,71 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
             <h4 className="text-lg font-semibold text-gray-900">{confirmDialogTitle}</h4>
             <p className="mt-2 text-base text-gray-600">{confirmDialogMessage}</p>
 
-            {!isUnsubscribeDialog && (
+            {confirmDialog?.type === "subscribe" && (
+              <div className="mt-3 space-y-2">
+                <div>
+                  <label className="text-base font-medium text-gray-700">
+                    {subgroupLabel}
+                  </label>
+                  <select
+                    value={subscribeSelectedSubgroup}
+                    onChange={(event) => setSubscribeSelectedSubgroup(event.target.value)}
+                    disabled={confirmBusy}
+                    className="mt-1 block w-full rounded-md border-gray-300 py-1.5 px-2 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-base disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <option value="all">{noPreferenceLabel}</option>
+                    {confirmDialog.availableSubgroups.map((sg) => (
+                      <option key={sg.subgroupId} value={sg.subgroupId}>{sg.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {subscribeDialogSourceHint && (
+                  <p className="text-base text-gray-500">{subscribeDialogSourceHint}</p>
+                )}
+
+                {subscribeDialogCurrentHint && (
+                  <p className="text-base text-gray-500">{subscribeDialogCurrentHint}</p>
+                )}
+
+                <p className="text-base text-gray-600">
+                  {subscribeDialogEpisodeRange
+                    ? (language === "zh"
+                        ? `\u5c06\u4e0b\u8f7d\uff1a${subscribeDialogEpisodeRange}`
+                        : `Will download: ${subscribeDialogEpisodeRange}`)
+                    : (language === "zh"
+                        ? "\u5f53\u524d\u65e0\u53ef\u4e0b\u8f7d\u96c6\u6570\uff0c\u540e\u7eed\u66f4\u65b0\u5c06\u81ea\u52a8\u4e0b\u8f7d\u3002"
+                        : "No episodes to download yet. Future updates will be downloaded automatically.")}
+                </p>
+
+                <p className="text-base text-gray-400">
+                  {language === "zh"
+                    ? "\u786e\u8ba4\u540e\u5c06\u7acb\u5373\u521b\u5efa\u8ba2\u9605\u5e76\u5f00\u59cb\u4e0b\u8f7d\u6240\u6709\u5df2\u53d1\u5e03\u96c6\u6570\u3002"
+                    : "This will create a subscription and start downloading all available episodes."}
+                </p>
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={closeConfirmDialog}
+                    disabled={confirmBusy}
+                    className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-900 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {cancelLabel}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void confirmDialogAction()}
+                    disabled={confirmBusy}
+                    className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-xs text-gray-900 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {confirmBusy ? (language === "zh" ? "\u5904\u7406\u4e2d..." : "Processing...") : confirmActionLabel}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!isUnsubscribeDialog && confirmDialog?.type !== "subscribe" && (
               <div className="mt-5 flex items-center justify-end gap-2">
                 <button
                   type="button"
@@ -1562,7 +2116,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                   type="button"
                   onClick={closeConfirmDialog}
                   disabled={confirmBusy}
-                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-900 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-sm text-gray-900 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {rollbackLabel}
                 </button>
@@ -1570,7 +2124,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                   type="button"
                   onClick={() => void confirmUnsubscribeAction("keep_files")}
                   disabled={confirmBusy}
-                  className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-xs text-gray-900 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-sm text-gray-900 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {confirmBusy ? (language === "zh" ? "\u5904\u7406\u4e2d..." : "Processing...") : cancelAndKeepLabel}
                 </button>
@@ -1578,7 +2132,7 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
                   type="button"
                   onClick={() => void confirmUnsubscribeAction("delete_files")}
                   disabled={confirmBusy}
-                  className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-sm text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {confirmBusy ? (language === "zh" ? "\u5904\u7406\u4e2d..." : "Processing...") : cancelAndDeleteLabel}
                 </button>
