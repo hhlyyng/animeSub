@@ -50,5 +50,9 @@ public interface IMikanClient
     /// </summary>
     /// <param name="mikanBangumiId">Mikan anime ID</param>
     /// <returns>List of subgroups with their numeric IDs</returns>
-    Task<List<MikanSubgroupInfo>> GetSubgroupsAsync(string mikanBangumiId);
+    /// <summary>
+    /// Scrape subgroup mapping from Mikan Bangumi page.
+    /// Returns null on scrape failure (keeps existing cache), empty list when page has no subgroups.
+    /// </summary>
+    Task<List<MikanSubgroupInfo>?> GetSubgroupsAsync(string mikanBangumiId);
 }

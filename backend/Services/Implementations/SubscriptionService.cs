@@ -560,28 +560,39 @@ public class SubscriptionService : ISubscriptionService
                     _logger.LogInformation("[Polling]   NEW: {Title} (hash={Hash})", ni.Title, ni.TorrentHash?[..Math.Min(8, ni.TorrentHash.Length)]);
             }
 
-            // Process new items
+            // Process new items (includes retries for previously Failed/Pending items)
             foreach (var item in newItems)
             {
                 try
                 {
-                    // Create download history record
-                    var history = new DownloadHistoryEntity
+                    // Check for existing record from a previous failed/pending attempt
+                    var history = await _repository.GetDownloadByHashAsync(item.TorrentHash!);
+                    if (history != null)
                     {
-                        SubscriptionId = subscription.Id,
-                        TorrentUrl = item.TorrentUrl,
-                        TorrentHash = item.TorrentHash,
-                        Title = item.Title,
-                        AnimeBangumiId = subscription.BangumiId,
-                        AnimeMikanBangumiId = subscription.MikanBangumiId,
-                        AnimeTitle = subscription.Title,
-                        FileSize = item.FileSize,
-                        PublishedAt = item.PublishedAt,
-                        Status = DownloadStatus.Pending,
-                        Source = DownloadSource.Subscription
-                    };
-
-                    await _repository.CreateDownloadHistoryAsync(history);
+                        _logger.LogInformation("[Polling] Retrying previously {Status} item: {Title} (hash={Hash})",
+                            history.Status, item.Title, item.TorrentHash?[..Math.Min(8, item.TorrentHash.Length)]);
+                        history.Status = DownloadStatus.Pending;
+                        history.ErrorMessage = null;
+                        await _repository.UpdateDownloadHistoryAsync(history);
+                    }
+                    else
+                    {
+                        history = new DownloadHistoryEntity
+                        {
+                            SubscriptionId = subscription.Id,
+                            TorrentUrl = item.TorrentUrl,
+                            TorrentHash = item.TorrentHash!,
+                            Title = item.Title,
+                            AnimeBangumiId = subscription.BangumiId,
+                            AnimeMikanBangumiId = subscription.MikanBangumiId,
+                            AnimeTitle = subscription.Title,
+                            FileSize = item.FileSize,
+                            PublishedAt = item.PublishedAt,
+                            Status = DownloadStatus.Pending,
+                            Source = DownloadSource.Subscription
+                        };
+                        await _repository.CreateDownloadHistoryAsync(history);
+                    }
 
                     // Add to qBittorrent
                     var torrentUrl = !string.IsNullOrEmpty(item.MagnetLink)
@@ -590,7 +601,7 @@ public class SubscriptionService : ISubscriptionService
 
                     var success = await _qbService.AddTorrentWithTrackingAsync(
                         torrentUrl,
-                        item.TorrentHash,
+                        item.TorrentHash!,
                         item.Title,
                         item.FileSize ?? 0,
                         DownloadSource.Subscription,

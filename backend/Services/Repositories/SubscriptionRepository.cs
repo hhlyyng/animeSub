@@ -144,8 +144,12 @@ public class SubscriptionRepository : ISubscriptionRepository
         if (hashList.Count == 0)
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // Only treat Downloading/Completed as "already handled".
+        // Pending/Failed items should be retried on next poll.
         var existing = await _context.DownloadHistory
-            .Where(d => d.TorrentHash != null && hashList.Contains(d.TorrentHash))
+            .Where(d => d.TorrentHash != null
+                && hashList.Contains(d.TorrentHash)
+                && (d.Status == DownloadStatus.Downloading || d.Status == DownloadStatus.Completed))
             .Select(d => d.TorrentHash!)
             .ToListAsync();
 

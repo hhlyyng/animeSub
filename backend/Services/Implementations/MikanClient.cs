@@ -238,16 +238,17 @@ public partial class MikanClient : IMikanClient
             }
             catch (HttpRequestException ex)
             {
-                _logger.LogError(ex, "Failed to search Mikan HTML for title: {Title}, mode={Mode}", title, query.Mode);
-                return null;
+                _logger.LogWarning(ex, "Failed to search Mikan HTML for title: {Title}, mode={Mode}, trying next strategy", title, query.Mode);
+                continue;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error parsing Mikan search result for: {Title}, mode={Mode}", title, query.Mode);
-                return null;
+                _logger.LogWarning(ex, "Error parsing Mikan search result for: {Title}, mode={Mode}, trying next strategy", title, query.Mode);
+                continue;
             }
         }
 
+        _logger.LogWarning("All search strategies exhausted for title: {Title}", title);
         return null;
     }
 
@@ -703,12 +704,12 @@ public partial class MikanClient : IMikanClient
             _logger.LogInformation("Retrieved RSS feed: Title={Title}, ItemsCount={Count}", feed.Title, feed.Items.Count);
 
             var response = BuildParsedFeedResponse(feed);
-            response.SubgroupMapping = subgroups;
+            response.SubgroupMapping = subgroups ?? new List<MikanSubgroupInfo>();
 
-            // Persist feed cache and subgroup mapping in parallel
-            var cacheFeedTask = UpsertCachedFeedAsync(mikanBangumiId, response);
-            var cacheSubgroupTask = UpsertCachedSubgroupMappingAsync(mikanBangumiId, subgroups);
-            await Task.WhenAll(cacheFeedTask, cacheSubgroupTask);
+            // Persist feed cache and subgroup mapping sequentially —
+            // both use the same scoped DbContext which is not thread-safe.
+            await UpsertCachedFeedAsync(mikanBangumiId, response);
+            await UpsertCachedSubgroupMappingAsync(mikanBangumiId, subgroups);
 
             return response;
         }
@@ -724,10 +725,8 @@ public partial class MikanClient : IMikanClient
         }
     }
 
-    public async Task<List<MikanSubgroupInfo>> GetSubgroupsAsync(string mikanBangumiId)
+    public async Task<List<MikanSubgroupInfo>?> GetSubgroupsAsync(string mikanBangumiId)
     {
-        var results = new List<MikanSubgroupInfo>();
-
         try
         {
             var url = $"Home/Bangumi/{mikanBangumiId}";
@@ -740,6 +739,8 @@ public partial class MikanClient : IMikanClient
             var doc = new HtmlDocument();
             doc.LoadHtml(htmlContent);
 
+            var results = new List<MikanSubgroupInfo>();
+
             // Mikan page structure: each subgroup section has:
             //   <a href="/Home/PublishGroup/XXX">SubgroupName</a>
             //   <a href="/RSS/Bangumi?bangumiId=...&subgroupid=XXX" class="mikan-rss">...</a>
@@ -747,7 +748,7 @@ public partial class MikanClient : IMikanClient
             if (rssLinks == null || rssLinks.Count == 0)
             {
                 _logger.LogWarning("No subgroup RSS links found on Mikan page for {MikanBangumiId}", mikanBangumiId);
-                return results;
+                return results; // empty list = page loaded fine, genuinely no subgroups
             }
 
             var seen = new HashSet<string>();
@@ -783,13 +784,13 @@ public partial class MikanClient : IMikanClient
             }
 
             _logger.LogInformation("Found {Count} subgroups for Mikan ID {MikanBangumiId}", results.Count, mikanBangumiId);
+            return results;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to scrape subgroups for Mikan ID {MikanBangumiId}", mikanBangumiId);
+            return null; // null = scrape failed, keep existing cache
         }
-
-        return results;
     }
 
     private MikanFeedResponse BuildParsedFeedResponse(MikanRssFeed feed)
@@ -1031,15 +1032,29 @@ public partial class MikanClient : IMikanClient
             .ToListAsync();
     }
 
-    private async Task UpsertCachedSubgroupMappingAsync(string mikanBangumiId, List<MikanSubgroupInfo> subgroups)
+    /// <summary>
+    /// Full-sync subgroup mapping for a given mikanBangumiId:
+    /// upsert current rows and prune any that no longer exist on the Mikan page.
+    /// Pass null to indicate scrape failure (keeps existing cache intact).
+    /// </summary>
+    private async Task UpsertCachedSubgroupMappingAsync(string mikanBangumiId, List<MikanSubgroupInfo>? subgroups)
     {
-        if (_dbContext == null || subgroups.Count == 0)
+        if (_dbContext == null)
         {
             return;
         }
 
-        var now = DateTime.UtcNow;
+        // null means scrape failed — keep existing cache, don't prune
+        if (subgroups == null)
+        {
+            _logger.LogDebug("Subgroup scrape returned null for Mikan ID {MikanBangumiId}, keeping existing cache", mikanBangumiId);
+            return;
+        }
 
+        var now = DateTime.UtcNow;
+        var currentIds = new HashSet<string>(subgroups.Select(sg => sg.SubgroupId));
+
+        // Upsert current subgroups
         foreach (var sg in subgroups)
         {
             var existing = await _dbContext.MikanSubgroups
@@ -1062,8 +1077,20 @@ public partial class MikanClient : IMikanClient
             }
         }
 
+        // Prune stale entries no longer present on the Mikan page
+        var staleEntries = await _dbContext.MikanSubgroups
+            .Where(s => s.MikanBangumiId == mikanBangumiId && !currentIds.Contains(s.SubgroupId))
+            .ToListAsync();
+
+        if (staleEntries.Count > 0)
+        {
+            _dbContext.MikanSubgroups.RemoveRange(staleEntries);
+            _logger.LogInformation("Pruned {Count} stale subgroup mappings for Mikan ID {MikanBangumiId}",
+                staleEntries.Count, mikanBangumiId);
+        }
+
         await _dbContext.SaveChangesAsync();
-        _logger.LogInformation("Persisted {Count} subgroup mappings for Mikan ID {MikanBangumiId}", subgroups.Count, mikanBangumiId);
+        _logger.LogInformation("Synced {Count} subgroup mappings for Mikan ID {MikanBangumiId}", subgroups.Count, mikanBangumiId);
     }
 
     private bool IsFeedCacheExpired(DateTime updatedAt)
