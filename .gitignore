@@ -76,3 +76,6 @@ backend/output.log
 
 # User uploads
 backend/Data/uploads/
+
+# Local audit notes
+audit_log/
