@@ -9,7 +9,8 @@ const CACHE_KEYS = {
     todayAnimes: 'v3:todayAnimes',
     bangumiTop10: 'v3:bangumiTop10',
     anilistTop10: 'v3:anilistTop10',
-    malTop10: 'v3:malTop10'
+    malTop10: 'v3:malTop10',
+    randomFeed: 'v3:randomFeed'
 };
 
 const API_BASE = `${API_BASE_URL}/anime`;
@@ -62,9 +63,13 @@ const HomeContent = () => {
     const [bangumiTop10, setBangumiTop10] = useState<AnimeInfo[]>([]);
     const [anilistTop10, setAnilistTop10] = useState<AnimeInfo[]>([]);
     const [malTop10, setMalTop10] = useState<AnimeInfo[]>([]);
+    const [randomAnimes, setRandomAnimes] = useState<AnimeInfo[]>([]);
+    const [randomPoolBuilding, setRandomPoolBuilding] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const language = useAppStore((state) => state.language);
+    const randomFeedEnabled = useAppStore((state) => state.randomFeedEnabled);
+    const randomFeedCount = useAppStore((state) => state.randomFeedCount);
 
     const texts = {
         loading: language === "zh" ? "\u6b63\u5728\u52a0\u8f7d\u52a8\u6f2b\u6570\u636e..." : "Loading anime data...",
@@ -73,7 +78,11 @@ const HomeContent = () => {
         todayTopic: language === "zh" ? "\u4eca\u65e5\u653e\u9001" : "Today's Anime",
         bangumiTopic: "Bangumi Top 10",
         anilistTopic: "AniList Top 10",
-        malTopic: "MAL Top 10"
+        malTopic: "MAL Top 10",
+        randomTopic: language === "zh" ? "\u968f\u673a\u63a8\u8350" : "Random Picks",
+        randomBuilding: language === "zh"
+            ? "\u968f\u673a\u63a8\u8350\u6b63\u5728\u51c6\u5907\u4e2d\uff0c\u9996\u6b21\u542f\u52a8\u7ea6\u9700 1-2 \u5206\u949f..."
+            : "Building recommendation pool, ~1-2 min on first start..."
     };
 
     // 閫氱敤鐨勮幏鍙栨暟鎹嚱鏁?
@@ -172,6 +181,50 @@ const HomeContent = () => {
         fetchAllData();
     }, []);
 
+    const fetchRandomFeed = async (force = false) => {
+        // Not forced: try sessionStorage first — avoids re-fetching on page navigation
+        if (!force) {
+            const cached = sessionStorage.getItem(CACHE_KEYS.randomFeed);
+            if (cached) {
+                try {
+                    setRandomAnimes(JSON.parse(cached) as AnimeInfo[]);
+                    return;
+                } catch {
+                    sessionStorage.removeItem(CACHE_KEYS.randomFeed);
+                }
+            }
+        }
+
+        try {
+            const res = await authFetch(`${API_BASE}/random?count=${randomFeedCount}`, { method: 'GET' });
+            if (res.status === 202) {
+                setRandomPoolBuilding(true);
+                setRandomAnimes([]);
+                setTimeout(() => { void fetchRandomFeed(true); }, 30000);
+            } else if (res.ok) {
+                const json = await res.json() as { data?: { animes?: AnimeInfo[] } };
+                const animes = json.data?.animes ?? [];
+                setRandomAnimes(animes);
+                sessionStorage.setItem(CACHE_KEYS.randomFeed, JSON.stringify(animes));
+                setRandomPoolBuilding(false);
+            }
+        } catch {
+            // Silently ignore random feed errors
+        }
+    };
+
+    useEffect(() => {
+        if (randomFeedEnabled) {
+            // Load from cache on navigation, only call API if no cache exists
+            void fetchRandomFeed(false);
+        } else {
+            setRandomAnimes([]);
+            setRandomPoolBuilding(false);
+            sessionStorage.removeItem(CACHE_KEYS.randomFeed);
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [randomFeedEnabled]);
+
     if (loading) {
         return (
             <div className="w-full px-12 flex justify-center items-center h-64">
@@ -202,6 +255,21 @@ const HomeContent = () => {
                 <div className="anime-flow-container">
                     <AnimeFlow topic={texts.todayTopic} items={todayAnimes} />
                 </div>
+            )}
+            {randomFeedEnabled && (
+                randomPoolBuilding ? (
+                    <div className="mb-4 flex items-center gap-2 text-sm text-gray-400">
+                        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                        </svg>
+                        {texts.randomBuilding}
+                    </div>
+                ) : randomAnimes.length > 0 ? (
+                    <div className="anime-flow-container">
+                        <AnimeFlow topic={texts.randomTopic} items={randomAnimes} onRefresh={() => void fetchRandomFeed(true)} />
+                    </div>
+                ) : null
             )}
             {bangumiTop10.length > 0 && (
                 <div className="anime-flow-container">

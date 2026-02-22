@@ -21,4 +21,11 @@ public interface IJikanClient
     /// <param name="malId">MyAnimeList anime ID</param>
     /// <returns>Jikan data payload, or null if unavailable</returns>
     Task<JsonElement?> GetAnimeDetailAsync(int malId);
+
+    /// <summary>
+    /// Get a specific page of top anime from MAL via Jikan API
+    /// </summary>
+    /// <param name="page">Page number (1-based)</param>
+    /// <param name="limit">Items per page (max 25)</param>
+    Task<List<JikanAnimeInfo>> GetTopAnimePageAsync(int page, int limit = 25);
 }

@@ -167,6 +167,12 @@ builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
     builder.Services.AddHostedService<backend.Services.Background.DownloadProgressSyncService>();
     builder.Services.AddHostedService<backend.Services.Background.AnimeTitleBackfillService>();
 
+// Register random anime pool services
+builder.Services.AddSingleton<backend.Services.Implementations.AnimePoolService>();
+builder.Services.AddSingleton<backend.Services.Interfaces.IAnimePoolService>(sp =>
+    sp.GetRequiredService<backend.Services.Implementations.AnimePoolService>());
+builder.Services.AddHostedService<backend.Services.Implementations.AnimePoolBuilderService>();
+
 // Register resilience service (Polly retry policies)
 builder.Services.AddSingleton<IResilienceService, ResilienceService>();
 

@@ -215,6 +215,10 @@ function FieldLabel({
 export default function SettingPage() {
   const language = useAppStore((state) => state.language);
   const loginUsername = useAppStore((state) => state.username);
+  const randomFeedEnabled = useAppStore((state) => state.randomFeedEnabled);
+  const randomFeedCount = useAppStore((state) => state.randomFeedCount);
+  const setRandomFeedEnabled = useAppStore((state) => state.setRandomFeedEnabled);
+  const setRandomFeedCount = useAppStore((state) => state.setRandomFeedCount);
   const zh = language === "zh";
 
   const [loading, setLoading] = useState(true);
@@ -847,6 +851,150 @@ export default function SettingPage() {
       </div>
 
       <div className="mb-5 rounded-xl border border-gray-200 bg-white p-5">
+        <h2 className="mb-4 mt-0 text-2xl font-bold text-gray-900">
+          {zh ? "随机推荐 Feed" : "Random Recommendation Feed"}
+        </h2>
+
+        <div className="flex items-center justify-between py-2">
+          <div>
+            <p className="text-base font-normal text-gray-900">
+              {zh ? "启用随机推荐" : "Enable random recommendations"}
+            </p>
+            <p className="text-xs text-gray-500">
+              {zh ? "在主页显示随机推荐的动画 Feed" : "Show a random anime feed on the homepage"}
+            </p>
+          </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={randomFeedEnabled}
+              onClick={() => setRandomFeedEnabled(!randomFeedEnabled)}
+              className="relative flex flex-shrink-0 cursor-pointer items-center focus:outline-none"
+              style={{
+                width: "51px",
+                height: "31px",
+                borderRadius: "15.5px",
+                padding: "2px",
+                border: "none",
+                boxSizing: "border-box",
+                backgroundColor: randomFeedEnabled ? "#34C759" : "#AEAEB2",
+                transition: "background-color 0.2s ease-in-out",
+              }}
+            >
+              <span
+                className="transition-transform duration-200 ease-in-out"
+                style={{
+                  width: "27px",
+                  height: "27px",
+                  borderRadius: "50%",
+                  backgroundColor: "white",
+                  flexShrink: 0,
+                  transform: randomFeedEnabled ? "translateX(20px)" : "translateX(0)",
+                  boxShadow: "0 3px 8px rgba(0,0,0,0.15), 0 3px 1px rgba(0,0,0,0.06)",
+                }}
+              />
+            </button>
+        </div>
+
+        {randomFeedEnabled && (
+          <div className="mt-3 border-t border-gray-100 pt-3">
+            <div className="grid grid-cols-[300px_1fr] items-start gap-3">
+              <FieldLabel
+                title={zh ? "显示数量" : "Card count"}
+                helpText={zh
+                  ? "主页随机推荐 Feed 显示的卡片数量，范围 1–20。每次刷新页面随机重新抽取。"
+                  : "Number of cards shown in the random feed on the homepage (1–20). Reshuffled on each page load."}
+              />
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={randomFeedCount}
+                  onChange={(e) => setRandomFeedCount(Number(e.target.value))}
+                  className="h-10 w-24 rounded-md border border-gray-300 px-3 text-center text-sm"
+                />
+                <span className="text-xs text-gray-500">
+                  {zh ? "最多 20 个" : "Max 20"}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="mb-5 rounded-xl border border-gray-200 bg-white p-5">
+        <h2 className="mb-4 mt-0 text-2xl font-bold text-gray-900">{text.sectionBackground}</h2>
+        <p className="mb-3 text-xs text-gray-500">{text.bgHelp}</p>
+        <div className="flex items-center gap-4">
+          {bgPreviewUrl ? (
+            <img
+              src={bgPreviewUrl}
+              alt="Login background"
+              className="h-20 w-32 rounded-md border border-gray-200 object-cover"
+            />
+          ) : (
+            <div className="flex h-20 w-32 items-center justify-center rounded-md border border-dashed border-gray-300 text-xs text-gray-400">
+              {text.bgNone}
+            </div>
+          )}
+          <div className="flex flex-col gap-2">
+            <input
+              ref={bgFileInputRef}
+              type="file"
+              accept=".jpg,.jpeg,.png,.webp"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const token = useAppStore.getState().token;
+                if (!token) return;
+                setBgUploading(true);
+                try {
+                  await authApi.uploadLoginBackground(file, token);
+                  setBgPreviewUrl(authApi.getLoginBackgroundUrl() + "?t=" + Date.now());
+                  toast.success(zh ? "上传成功" : "Upload successful");
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : "Upload failed");
+                } finally {
+                  setBgUploading(false);
+                  if (bgFileInputRef.current) bgFileInputRef.current.value = "";
+                }
+              }}
+            />
+            <button
+              type="button"
+              disabled={bgUploading}
+              onClick={() => bgFileInputRef.current?.click()}
+              className="inline-flex h-8 items-center justify-center rounded-md border border-gray-300 bg-gray-100 px-3 text-xs hover:bg-gray-200 disabled:opacity-50"
+            >
+              {bgUploading ? "..." : text.bgUpload}
+            </button>
+            {bgPreviewUrl && (
+              <button
+                type="button"
+                disabled={bgUploading}
+                onClick={async () => {
+                  const token = useAppStore.getState().token;
+                  if (!token) return;
+                  try {
+                    await authApi.deleteLoginBackground(token);
+                    setBgPreviewUrl(null);
+                    toast.success(zh ? "已删除" : "Removed");
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : "Delete failed");
+                  }
+                }}
+                className="inline-flex h-8 items-center justify-center rounded-md border border-red-300 bg-white px-3 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+              >
+                {text.bgRemove}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-5 rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="m-0 text-2xl font-bold text-gray-900">{text.sectionTmdb}</h2>
           <HelpTip text={text.tmdbHelp} />
@@ -1188,77 +1336,6 @@ export default function SettingPage() {
                 ))}
               </div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="mb-5 rounded-xl border border-gray-200 bg-white p-5">
-        <h2 className="mb-4 mt-0 text-2xl font-bold text-gray-900">{text.sectionBackground}</h2>
-        <p className="mb-3 text-xs text-gray-500">{text.bgHelp}</p>
-        <div className="flex items-center gap-4">
-          {bgPreviewUrl ? (
-            <img
-              src={bgPreviewUrl}
-              alt="Login background"
-              className="h-20 w-32 rounded-md border border-gray-200 object-cover"
-            />
-          ) : (
-            <div className="flex h-20 w-32 items-center justify-center rounded-md border border-dashed border-gray-300 text-xs text-gray-400">
-              {text.bgNone}
-            </div>
-          )}
-          <div className="flex flex-col gap-2">
-            <input
-              ref={bgFileInputRef}
-              type="file"
-              accept=".jpg,.jpeg,.png,.webp"
-              className="hidden"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                const token = useAppStore.getState().token;
-                if (!token) return;
-                setBgUploading(true);
-                try {
-                  await authApi.uploadLoginBackground(file, token);
-                  setBgPreviewUrl(authApi.getLoginBackgroundUrl() + "?t=" + Date.now());
-                  toast.success(zh ? "上传成功" : "Upload successful");
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : "Upload failed");
-                } finally {
-                  setBgUploading(false);
-                  if (bgFileInputRef.current) bgFileInputRef.current.value = "";
-                }
-              }}
-            />
-            <button
-              type="button"
-              disabled={bgUploading}
-              onClick={() => bgFileInputRef.current?.click()}
-              className="inline-flex h-8 items-center justify-center rounded-md border border-gray-300 bg-gray-100 px-3 text-xs hover:bg-gray-200 disabled:opacity-50"
-            >
-              {bgUploading ? "..." : text.bgUpload}
-            </button>
-            {bgPreviewUrl && (
-              <button
-                type="button"
-                disabled={bgUploading}
-                onClick={async () => {
-                  const token = useAppStore.getState().token;
-                  if (!token) return;
-                  try {
-                    await authApi.deleteLoginBackground(token);
-                    setBgPreviewUrl(null);
-                    toast.success(zh ? "已删除" : "Removed");
-                  } catch (err) {
-                    toast.error(err instanceof Error ? err.message : "Delete failed");
-                  }
-                }}
-                className="inline-flex h-8 items-center justify-center rounded-md border border-red-300 bg-white px-3 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
-              >
-                {text.bgRemove}
-              </button>
-            )}
           </div>
         </div>
       </div>

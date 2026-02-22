@@ -92,33 +92,42 @@ namespace backend.Services.Implementations
                 };
             }, "GetAnimeInfo", new Dictionary<string, object> { ["Title"] = japaneseTitle });
 
-        public async Task<List<AniListAnimeInfo>> GetTrendingAnimeAsync(int limit = 10)
+        public Task<List<AniListAnimeInfo>> GetTrendingAnimeAsync(int limit = 10) =>
+            GetAnimeListAsync("TRENDING_DESC", limit);
+
+        public Task<List<AniListAnimeInfo>> GetAnimeByPopularityAsync(int limit = 50) =>
+            GetAnimeListAsync("POPULARITY_DESC", limit);
+
+        public Task<List<AniListAnimeInfo>> GetAnimeByScoreAsync(int limit = 50) =>
+            GetAnimeListAsync("SCORE_DESC", limit);
+
+        private async Task<List<AniListAnimeInfo>> GetAnimeListAsync(string sortOrder, int limit)
         {
             try
             {
-                Logger.LogInformation("Fetching {Limit} trending anime from AniList", limit);
+                Logger.LogInformation("Fetching {Limit} anime from AniList (sort: {Sort})", limit, sortOrder);
 
-                const string query = @"
-                    query ($perPage: Int) {
-                        Page(perPage: $perPage) {
-                            media(sort: TRENDING_DESC, type: ANIME) {
+                var query = $@"
+                    query ($perPage: Int) {{
+                        Page(perPage: $perPage) {{
+                            media(sort: {sortOrder}, type: ANIME) {{
                                 id
-                                title {
+                                title {{
                                     romaji
                                     native
                                     english
-                                }
+                                }}
                                 description
                                 averageScore
-                                coverImage {
+                                coverImage {{
                                     large
                                     extraLarge
-                                }
+                                }}
                                 bannerImage
                                 siteUrl
-                            }
-                        }
-                    }";
+                            }}
+                        }}
+                    }}";
 
                 var payload = new
                 {
@@ -136,7 +145,7 @@ namespace backend.Services.Implementations
 
                 if (!resp.IsSuccessStatusCode)
                 {
-                    Logger.LogError("AniList API returned status {StatusCode} for trending query", resp.StatusCode);
+                    Logger.LogError("AniList API returned status {StatusCode} for {Sort} query", resp.StatusCode, sortOrder);
                     return new List<AniListAnimeInfo>();
                 }
 
@@ -145,7 +154,7 @@ namespace backend.Services.Implementations
 
                 if (!doc.RootElement.TryGetProperty("data", out var dataElement))
                 {
-                    Logger.LogError("Invalid AniList response format for trending query");
+                    Logger.LogError("Invalid AniList response format for {Sort} query", sortOrder);
                     return new List<AniListAnimeInfo>();
                 }
 
@@ -192,12 +201,12 @@ namespace backend.Services.Implementations
                     });
                 }
 
-                Logger.LogInformation("Retrieved {Count} trending anime from AniList", results.Count);
+                Logger.LogInformation("Retrieved {Count} anime from AniList (sort: {Sort})", results.Count, sortOrder);
                 return results;
             }
             catch (Exception ex)
             {
-                Logger.LogWarning(ex, "Failed to fetch trending anime from AniList");
+                Logger.LogWarning(ex, "Failed to fetch anime from AniList (sort: {Sort})", sortOrder);
                 return new List<AniListAnimeInfo>();
             }
         }

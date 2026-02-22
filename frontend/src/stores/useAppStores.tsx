@@ -17,6 +17,8 @@ interface AppState {
   isModalOpen: boolean;
   downloadPreferences: DownloadPreferences;
   downloadLoading: boolean;
+  randomFeedEnabled: boolean;
+  randomFeedCount: number;
   setUsername: (name: string) => void;
   setLanguage: (lang: Language) => void;
   setToken: (token: string | null) => void;
@@ -25,6 +27,8 @@ interface AppState {
   logout: () => void;
   setDownloadPreferences: (prefs: Partial<DownloadPreferences>) => void;
   setDownloadLoading: (loading: boolean) => void;
+  setRandomFeedEnabled: (v: boolean) => void;
+  setRandomFeedCount: (v: number) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -40,6 +44,8 @@ export const useAppStore = create<AppState>()(
         subtitleType: "all",
       },
       downloadLoading: false,
+      randomFeedEnabled: false,
+      randomFeedCount: 10,
       setUsername: (name) => set({ username: name }),
       setLanguage: (lang) => set({ language: lang }),
       setToken: (token) => set({ token }),
@@ -51,6 +57,8 @@ export const useAppStore = create<AppState>()(
           downloadPreferences: { ...state.downloadPreferences, ...prefs },
         })),
       setDownloadLoading: (loading) => set({ downloadLoading: loading }),
+      setRandomFeedEnabled: (v) => set({ randomFeedEnabled: v }),
+      setRandomFeedCount: (v) => set({ randomFeedCount: Math.min(20, Math.max(1, v)) }),
     }),
     {
       name: "anime-app-storage",
@@ -59,6 +67,8 @@ export const useAppStore = create<AppState>()(
         language: state.language,
         token: state.token,
         downloadPreferences: state.downloadPreferences,
+        randomFeedEnabled: state.randomFeedEnabled,
+        randomFeedCount: state.randomFeedCount,
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {

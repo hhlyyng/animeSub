@@ -18,6 +18,7 @@ public class AnimeController : ControllerBase
     private readonly ITokenStorageService _tokenStorage;
     private readonly TokenValidator _tokenValidator;
     private readonly IAnimeRepository _animeRepository;
+    private readonly IAnimePoolService _animePoolService;
     private readonly ILogger<AnimeController> _logger;
 
     public AnimeController(
@@ -25,12 +26,14 @@ public class AnimeController : ControllerBase
         ITokenStorageService tokenStorage,
         TokenValidator tokenValidator,
         IAnimeRepository animeRepository,
+        IAnimePoolService animePoolService,
         ILogger<AnimeController> logger)
     {
         _aggregationService = aggregationService ?? throw new ArgumentNullException(nameof(aggregationService));
         _tokenStorage = tokenStorage ?? throw new ArgumentNullException(nameof(tokenStorage));
         _tokenValidator = tokenValidator ?? throw new ArgumentNullException(nameof(tokenValidator));
         _animeRepository = animeRepository ?? throw new ArgumentNullException(nameof(animeRepository));
+        _animePoolService = animePoolService ?? throw new ArgumentNullException(nameof(animePoolService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -179,6 +182,40 @@ public class AnimeController : ControllerBase
             success = response.Success,
             data = new { count = response.Count, animes = response.Animes },
             message = response.Message
+        });
+    }
+
+    /// <summary>
+    /// Get random anime picks from the pre-built recommendation pool
+    /// </summary>
+    /// <remarks>
+    /// Returns HTTP 202 with building=true if the pool is still being built on first startup.
+    /// The pool is rebuilt every 24 hours in the background.
+    /// </remarks>
+    /// <param name="count">Number of random picks to return (1-20, default 10)</param>
+    [HttpGet("random")]
+    public async Task<IActionResult> GetRandomAnime(
+        [FromQuery] int count = 10,
+        CancellationToken cancellationToken = default)
+    {
+        count = Math.Clamp(count, 1, 20);
+
+        if (_animePoolService.PoolSize == 0)
+        {
+            return StatusCode(202, new
+            {
+                success = false,
+                building = _animePoolService.IsBuilding,
+                message = "推荐库正在构建中，请稍后重试"
+            });
+        }
+
+        var picks = await _animePoolService.GetRandomPicksAsync(count, cancellationToken);
+        return Ok(new
+        {
+            success = true,
+            data = new { count = picks.Count, animes = picks, poolSize = _animePoolService.PoolSize },
+            message = $"随机推荐 {picks.Count} 部动画"
         });
     }
 

@@ -3,10 +3,12 @@ import { AnimeCard } from "./AnimeCard";
 import { AnimeDetailModal } from "./AnimeDetailModal";
 import type { AnimeInfo } from "../../../types/anime";
 import { useAppStore } from "../../../stores/useAppStores";
+import ShuffleIcon from "../../../components/icons/ShuffleIcon";
 
 type AnimeFlowProps = {
   topic: string;
   items: AnimeInfo[];
+  onRefresh?: () => void;
 };
 
 // 卡片展开时的宽度变化：534px - 200px = 334px
@@ -20,7 +22,7 @@ const NAV_BUTTON_SIZE = 48;
 const TITLE_BASE_OFFSET = NAV_BUTTON_SIZE + FLOW_GAP;
 const ANIMATION_DURATION = 300;
 
-export function AnimeFlow({ topic, items }: AnimeFlowProps) {
+export function AnimeFlow({ topic, items, onRefresh }: AnimeFlowProps) {
   const [windowSize, setWindowSize] = useState(7); //default window size: 7
   const step = Math.max(1, windowSize - 1);
   const [startIndex, setStartIndex] = useState(0);
@@ -38,6 +40,8 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
   const [selectedAnime, setSelectedAnime] = useState<AnimeInfo | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const setGlobalModalOpen = useAppStore((state) => state.setModalOpen);
+  const language = useAppStore((state) => state.language);
+  const [isRefreshHovered, setIsRefreshHovered] = useState(false);
 
   // 处理卡片hover状态变化
   const handleCardHoverChange = (isHovered: boolean, hasLandscape: boolean, cardIndex: number) => {
@@ -170,10 +174,37 @@ export function AnimeFlow({ topic, items }: AnimeFlowProps) {
         style={{ marginLeft: `calc(50% - ${flowBaseWidth / 2}px)` }}
       >
       {/* 标题区域 - 左边距与卡片对齐，hover展开时补偿位移 */}
-      <div className="mb-4" style={{ marginLeft: `${TITLE_BASE_OFFSET}px` }}>
+      <div className="mb-4 flex items-center gap-2" style={{ marginLeft: `${TITLE_BASE_OFFSET}px` }}>
         <h2 className="text-2xl font-bold text-gray-900">
           {topic}
         </h2>
+        {onRefresh && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            title={language === "zh" ? "换一批" : "Shuffle"}
+            onMouseEnter={() => setIsRefreshHovered(true)}
+            onMouseLeave={() => setIsRefreshHovered(false)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "28px",
+              height: "28px",
+              backgroundColor: "white",
+              border: "none",
+              borderRadius: "6px",
+              cursor: "pointer",
+              color: "black",
+              padding: "6px",
+              flexShrink: 0,
+              transform: isRefreshHovered ? "scale(1.3)" : "scale(1)",
+              transition: "transform 0.15s ease",
+            }}
+          >
+            <ShuffleIcon />
+          </button>
+        )}
       </div>
 
       {/* 卡片流区域 */}
