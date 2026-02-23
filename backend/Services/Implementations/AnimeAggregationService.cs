@@ -980,6 +980,106 @@ public class AnimeAggregationService : IAnimeAggregationService
         }
     }
 
+    public async Task<AnimeListResponse> SearchAnimeAsync(
+        string query,
+        string? bangumiToken = null,
+        string? tmdbToken = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(bangumiToken))
+            _bangumiClient.SetToken(bangumiToken);
+        _tmdbClient.SetToken(tmdbToken);
+        _logger.LogInformation("Searching anime for query: {Query}", query);
+
+        try
+        {
+            var subjectList = await _bangumiClient.SearchSubjectListAsync(query);
+            var animeDtos = new List<AnimeInfoDto>();
+
+            if (subjectList.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var subject in subjectList.EnumerateArray())
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    var id = subject.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+                    if (id == 0) continue;
+
+                    var jpTitle = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                    var chTitle = subject.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+                    var chDesc = subject.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
+                    var airDate = subject.TryGetProperty("date", out var dateEl) ? dateEl.GetString() : null;
+
+                    var score = "0";
+                    if (subject.TryGetProperty("rating", out var rating) &&
+                        rating.TryGetProperty("score", out var scoreEl))
+                    {
+                        score = scoreEl.GetDouble().ToString("F1");
+                    }
+
+                    var portraitUrl = subject.TryGetProperty("images", out var images) &&
+                                      images.TryGetProperty("large", out var large)
+                                      ? large.GetString() ?? "" : "";
+
+                    // Enrich with TMDB (landscape + English data)
+                    var (enTitle, enDesc, landscapeUrl, tmdbUrl) = await EnrichWithTmdbAsync(jpTitle, airDate);
+
+                    // If TMDB didn't return landscape, try AniList
+                    var anilistUrl = "";
+                    if (string.IsNullOrEmpty(landscapeUrl))
+                    {
+                        var anilistData = await EnrichWithAniListAsync(jpTitle);
+                        if (anilistData != null)
+                        {
+                            landscapeUrl = anilistData.BannerImage ?? "";
+                            anilistUrl = anilistData.OriSiteUrl ?? "";
+                            if (string.IsNullOrEmpty(enTitle)) enTitle = anilistData.EnglishTitle ?? "";
+                            if (string.IsNullOrEmpty(enDesc)) enDesc = StripHtmlTags(anilistData.EnglishSummary ?? "");
+                        }
+                    }
+
+                    animeDtos.Add(new AnimeInfoDto
+                    {
+                        BangumiId = id.ToString(),
+                        JpTitle = jpTitle,
+                        ChTitle = chTitle,
+                        EnTitle = enTitle,
+                        ChDesc = string.IsNullOrEmpty(chDesc) ? "无可用中文介绍" : chDesc,
+                        EnDesc = string.IsNullOrEmpty(enDesc) ? "No English description available" : enDesc,
+                        Score = score,
+                        Images = new AnimeImagesDto { Portrait = portraitUrl, Landscape = landscapeUrl },
+                        ExternalUrls = new ExternalUrlsDto
+                        {
+                            Bangumi = $"https://bgm.tv/subject/{id}",
+                            Tmdb = tmdbUrl,
+                            Anilist = anilistUrl
+                        }
+                    });
+                }
+            }
+
+            _logger.LogInformation("Search for '{Query}' returned {Count} results (enriched)", query, animeDtos.Count);
+            return new AnimeListResponse
+            {
+                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Message = $"Search results for '{query}' ({animeDtos.Count} found)",
+                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
+                Animes = animeDtos, RetryAttempts = 0
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to search anime for query: {Query}", query);
+            return new AnimeListResponse
+            {
+                Success = false, DataSource = DataSource.Api, IsStale = true,
+                Message = $"Search failed: {ex.Message}",
+                LastUpdated = null, Count = 0,
+                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
+            };
+        }
+    }
+
     #region Enrichment Helper Methods
 
     /// <summary>

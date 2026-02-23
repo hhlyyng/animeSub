@@ -50,4 +50,17 @@ public interface IAnimeAggregationService
         string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Search anime by title keyword with enriched data from multiple sources
+    /// </summary>
+    /// <param name="query">Search keyword</param>
+    /// <param name="bangumiToken">Bangumi API token (optional)</param>
+    /// <param name="tmdbToken">TMDB API token for backdrop images (optional)</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    Task<AnimeListResponse> SearchAnimeAsync(
+        string query,
+        string? bangumiToken = null,
+        string? tmdbToken = null,
+        CancellationToken cancellationToken = default);
 }

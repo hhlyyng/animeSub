@@ -4,13 +4,14 @@ import { SidebarButton } from "./SideBarButton";
 import HomeIcon from "../../../components/icons/HomeIcon";
 import SettingIcon from "../../../components/icons/SettingIcon";
 import DownloadIcon from "../../../components/icons/DownloadIcon";
+import SearchIcon from "../../../components/icons/SearchIcon";
 import { DefaultSideBar, CollapseSideBarArrow, ExpandSideBarArrow } from "../../../components/icons/SidebarIcon";
 import GithubIcon from "../../../components/icons/GithubIcon";
 import LanguageToggleIcon from "../../../components/icons/LanguageToggleIcon";
 import LogoutIcon from "../../../components/icons/LogoutIcon";
 import { useAppStore } from "../../../stores/useAppStores";
 
-type PageType = "home" | "setting" | "download";
+type PageType = "home" | "setting" | "download" | "search";
 
 interface SideBarProps {
   language: "en" | "zh";
@@ -22,6 +23,7 @@ const text: Record<
   "zh" | "en",
   {
     home: string;
+    search: string;
     settings: string;
     download: string;
     github: string;
@@ -31,6 +33,7 @@ const text: Record<
 > = {
   zh: {
     home: "\u4e3b\u9875",
+    search: "\u641c\u7d22",
     settings: "\u8bbe\u7f6e",
     download: "\u8ba2\u9605\u548c\u4e0b\u8f7d",
     github: "\u9879\u76ee\u5730\u5740",
@@ -39,6 +42,7 @@ const text: Record<
   },
   en: {
     home: "Homepage",
+    search: "Search",
     settings: "Setting",
     download: "Subscriptions & Downloads",
     github: "GitHub",
@@ -82,6 +86,9 @@ const SideBar = ({ language, currentPage, onLanguageChange }: SideBarProps) => {
       case "setting":
         navigate("/setting");
         break;
+      case 'search':
+        navigate('/search');
+        break;
     }
   };
 
@@ -124,6 +131,17 @@ const SideBar = ({ language, currentPage, onLanguageChange }: SideBarProps) => {
           onClick={() => navigateToPage("home")}
           showtext={showText}
           active={currentPage === "home"}
+          language={language}
+        />
+
+        <SidebarButton
+          icon={<SearchIcon />}
+          label={currentLanguage.search}
+          variant="action"
+          collapsed={isCollapsed}
+          onClick={() => navigateToPage('search')}
+          showtext={showText}
+          active={currentPage === 'search'}
           language={language}
         />
 

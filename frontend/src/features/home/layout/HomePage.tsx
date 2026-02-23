@@ -3,6 +3,7 @@ import SideBar from "./SideBar";
 import HomeContent from "../components/HomePageContent";
 import Setting from "../components/SettingPage";
 import MySubscriptionDownloadPage from "../components/MySubscriptionDownloadPage";
+import SearchPage from "../components/SearchPage";
 import { useAppStore } from "../../../stores/useAppStores";
 
 // Route Content
@@ -12,7 +13,7 @@ const AppContent = () => {
   const setLanguage = useAppStore((state) => state.setLanguage);
   const isModalOpen = useAppStore((state) => state.isModalOpen);
 
-  const getCurrentPageType = (): 'home' | 'setting' | 'download' => {
+  const getCurrentPageType = (): 'home' | 'setting' | 'download' | 'search' => {
     switch (location.pathname) {
       case '/':
       case '/home':
@@ -22,6 +23,8 @@ const AppContent = () => {
       case '/setting':
       case '/settings':
         return 'setting';
+      case '/search':
+        return 'search';
       default:
         return 'home';
     }
@@ -42,6 +45,7 @@ const AppContent = () => {
           <Route path="/download" element={<MySubscriptionDownloadPage />} />
           <Route path="/setting" element={<Setting />} />
           <Route path="/settings" element={<Setting />} />
+          <Route path="/search" element={<SearchPage />} />
           <Route path="*" element={<HomeContent />} />
         </Routes>
       </main>
