@@ -10,6 +10,7 @@ public interface ITokenStorageService
 {
     Task<string?> GetTmdbTokenAsync();
     Task SaveTmdbTokenAsync(string? tmdbToken);
+    Task<string?> GetBangumiTokenAsync();
 }
 
 /// <summary>
@@ -54,6 +55,18 @@ public class TokenStorageService : ITokenStorageService
         // Legacy fallback
         var tokens = await ReadTokensAsync();
         return DecryptToken(tokens?.TmdbToken);
+    }
+
+    public async Task<string?> GetBangumiTokenAsync()
+    {
+        var configuredToken = _configuration["ApiTokens:BangumiToken"];
+        if (!string.IsNullOrWhiteSpace(configuredToken))
+        {
+            return configuredToken;
+        }
+
+        var tokens = await ReadTokensAsync();
+        return DecryptToken(tokens?.BangumiToken);
     }
 
     public async Task SaveTmdbTokenAsync(string? tmdbToken)
@@ -149,6 +162,7 @@ public class TokenStorageService : ITokenStorageService
     private class UserTokens
     {
         public string? TmdbToken { get; set; }
+        public string? BangumiToken { get; set; }
         public DateTime UpdatedAt { get; set; }
     }
 }

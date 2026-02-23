@@ -37,7 +37,7 @@ public class AnimeInfoEntity
     public string? UrlBangumi { get; set; }
     public string? UrlTmdb { get; set; }
     public string? UrlAnilist { get; set; }
-    
+
     // Mikan integration
     /// <summary>
     /// Mikan Bangumi ID for RSS feed URL construction

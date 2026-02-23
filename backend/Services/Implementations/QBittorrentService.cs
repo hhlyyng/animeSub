@@ -502,8 +502,8 @@ public class QBittorrentService : IQBittorrentService
 
     private async Task<LoginAttemptResult> SendLoginRequestAsync(string loginUrl)
     {
-            using var formData = new FormUrlEncodedContent(new[]
-        {
+        using var formData = new FormUrlEncodedContent(new[]
+    {
             new KeyValuePair<string, string>("username", CurrentConfig.Username),
             new KeyValuePair<string, string>("password", CurrentConfig.Password)
         });

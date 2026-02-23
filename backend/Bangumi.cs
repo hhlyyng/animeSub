@@ -47,7 +47,7 @@ public sealed class BangumiClient : IDisposable
                     return dayElement.GetProperty("items");
                 }
             }
-            
+
             throw new InvalidOperationException($"Today's data not found in calendar response");
         }
         else

@@ -160,12 +160,12 @@ builder.Services.AddScoped<IAnimeCacheService, AnimeCacheService>();
 builder.Services.AddScoped<ISubscriptionRepository, SubscriptionRepository>();
 builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 
-    // Register background services
-    builder.Services.AddHostedService<backend.Services.Background.MikanFeedSubgroupCleanupService>();
-    builder.Services.AddHostedService<backend.Services.Background.RssPollingService>();
-    builder.Services.AddHostedService<backend.Services.Background.AnimePreFetchService>();
-    builder.Services.AddHostedService<backend.Services.Background.DownloadProgressSyncService>();
-    builder.Services.AddHostedService<backend.Services.Background.AnimeTitleBackfillService>();
+// Register background services
+builder.Services.AddHostedService<backend.Services.Background.MikanFeedSubgroupCleanupService>();
+builder.Services.AddHostedService<backend.Services.Background.RssPollingService>();
+builder.Services.AddHostedService<backend.Services.Background.AnimePreFetchService>();
+builder.Services.AddHostedService<backend.Services.Background.DownloadProgressSyncService>();
+builder.Services.AddHostedService<backend.Services.Background.AnimeTitleBackfillService>();
 
 // Register random anime pool services
 builder.Services.AddSingleton<backend.Services.Implementations.AnimePoolService>();

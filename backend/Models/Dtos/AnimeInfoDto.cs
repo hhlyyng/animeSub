@@ -60,7 +60,7 @@ public class AnimeInfoDto
     /// </summary>
     [JsonPropertyName("external_urls")]
     public ExternalUrlsDto? ExternalUrls { get; set; }
-    
+
     /// <summary>
     /// Mikan Bangumi ID for RSS feed URL construction
     /// Used to map anime to Mikan RSS feeds without searching

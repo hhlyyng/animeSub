@@ -1067,7 +1067,7 @@ public partial class MikanClient : IMikanClient
             }
             else
             {
-                _dbContext.MikanSubgroups.Add(new Data.Entities.MikanSubgroupEntity
+                _dbContext.MikanSubgroups.Add(new MikanSubgroupEntity
                 {
                     MikanBangumiId = mikanBangumiId,
                     SubgroupId = sg.SubgroupId,

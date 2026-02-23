@@ -596,10 +596,14 @@ public class AnimeAggregationService : IAnimeAggregationService
             _logger.LogInformation("Retrieved {Count} top anime from Bangumi (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
                 Message = $"Top {animeDtos.Count} anime from Bangumi (enriched)",
-                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
-                Animes = animeDtos, RetryAttempts = 0
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
             };
         }
         catch (Exception ex)
@@ -629,10 +633,14 @@ public class AnimeAggregationService : IAnimeAggregationService
 
             return new AnimeListResponse
             {
-                Success = false, DataSource = DataSource.Api, IsStale = true,
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
                 Message = $"Failed to fetch Bangumi top anime: {ex.Message}",
-                LastUpdated = null, Count = 0,
-                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
             };
         }
     }
@@ -720,10 +728,14 @@ public class AnimeAggregationService : IAnimeAggregationService
             _logger.LogInformation("Retrieved {Count} trending anime from AniList (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
                 Message = $"Top {animeDtos.Count} trending anime from AniList (enriched)",
-                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
-                Animes = animeDtos, RetryAttempts = 0
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
             };
         }
         catch (Exception ex)
@@ -753,10 +765,14 @@ public class AnimeAggregationService : IAnimeAggregationService
 
             return new AnimeListResponse
             {
-                Success = false, DataSource = DataSource.Api, IsStale = true,
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
                 Message = $"Failed to fetch AniList trending anime: {ex.Message}",
-                LastUpdated = null, Count = 0,
-                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
             };
         }
     }
@@ -939,10 +955,14 @@ public class AnimeAggregationService : IAnimeAggregationService
             _logger.LogInformation("Retrieved {Count} top anime from MAL (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
                 Message = $"Top {animeDtos.Count} anime from MyAnimeList (enriched)",
-                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
-                Animes = animeDtos, RetryAttempts = 0
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
             };
         }
         catch (Exception ex)
@@ -972,10 +992,14 @@ public class AnimeAggregationService : IAnimeAggregationService
 
             return new AnimeListResponse
             {
-                Success = false, DataSource = DataSource.Api, IsStale = true,
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
                 Message = $"Failed to fetch MAL top anime: {ex.Message}",
-                LastUpdated = null, Count = 0,
-                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
             };
         }
     }

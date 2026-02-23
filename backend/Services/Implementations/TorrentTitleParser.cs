@@ -305,17 +305,17 @@ public partial class TorrentTitleParser : ITorrentTitleParser
 
         bool hasChs = tokens.Contains("简体");
         bool hasCht = tokens.Contains("繁体");
-        bool hasJp  = tokens.Contains("日");
+        bool hasJp = tokens.Contains("日");
 
-        if (tokens.Contains("简繁日"))                         return "简繁日";
-        if (tokens.Contains("简繁"))                           return "简繁";
-        if ((hasChs && hasCht) || tokens.Contains("简/繁"))   return "简繁";
-        if (tokens.Contains("简日"))                           return "简日";
-        if (tokens.Contains("繁日"))                           return "繁日";
-        if (hasChs && hasJp)                                   return "简日";
-        if (hasCht && hasJp)                                   return "繁日";
-        if (hasChs)                                            return "简体";
-        if (hasCht)                                            return "繁体";
+        if (tokens.Contains("简繁日")) return "简繁日";
+        if (tokens.Contains("简繁")) return "简繁";
+        if ((hasChs && hasCht) || tokens.Contains("简/繁")) return "简繁";
+        if (tokens.Contains("简日")) return "简日";
+        if (tokens.Contains("繁日")) return "繁日";
+        if (hasChs && hasJp) return "简日";
+        if (hasCht && hasJp) return "繁日";
+        if (hasChs) return "简体";
+        if (hasCht) return "繁体";
 
         return tokens.FirstOrDefault();
     }
