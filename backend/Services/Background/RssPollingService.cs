@@ -12,16 +12,16 @@ public class RssPollingService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<RssPollingService> _logger;
-    private readonly MikanConfiguration _config;
+    private readonly IOptionsMonitor<MikanConfiguration> _config;
 
     public RssPollingService(
         IServiceScopeFactory scopeFactory,
         ILogger<RssPollingService> logger,
-        IOptions<MikanConfiguration> config)
+        IOptionsMonitor<MikanConfiguration> config)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
-        _config = config.Value;
+        _config = config;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -29,12 +29,15 @@ public class RssPollingService : BackgroundService
         _logger.LogInformation("RSS Polling Service starting");
 
         // Wait for startup delay to allow other services to initialize
-        _logger.LogInformation("Waiting {Delay} seconds before first poll...", _config.StartupDelaySeconds);
-        await Task.Delay(TimeSpan.FromSeconds(_config.StartupDelaySeconds), stoppingToken);
+        var startupConfig = _config.CurrentValue;
+        _logger.LogInformation("Waiting {Delay} seconds before first poll...", startupConfig.StartupDelaySeconds);
+        await Task.Delay(TimeSpan.FromSeconds(startupConfig.StartupDelaySeconds), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            if (_config.EnablePolling)
+            var currentConfig = _config.CurrentValue;
+
+            if (currentConfig.EnablePolling)
             {
                 await PollSubscriptionsAsync(stoppingToken);
             }
@@ -44,8 +47,9 @@ public class RssPollingService : BackgroundService
             }
 
             // Wait for next poll interval
-            var interval = TimeSpan.FromMinutes(_config.PollingIntervalMinutes);
-            _logger.LogDebug("Next poll in {Minutes} minutes", _config.PollingIntervalMinutes);
+            var pollingIntervalMinutes = Math.Clamp(currentConfig.PollingIntervalMinutes, 1, 1440);
+            var interval = TimeSpan.FromMinutes(pollingIntervalMinutes);
+            _logger.LogDebug("Next poll in {Minutes} minutes", pollingIntervalMinutes);
 
             try
             {

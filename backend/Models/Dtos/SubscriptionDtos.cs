@@ -59,6 +59,39 @@ public class UpdateSubscriptionRequest
 }
 
 /// <summary>
+/// Request DTO for canceling a subscription
+/// </summary>
+public class CancelSubscriptionRequest
+{
+    /// <summary>
+    /// Cancel action: delete_files or keep_files
+    /// </summary>
+    public string Action { get; set; } = CancelSubscriptionActionValues.KeepFiles;
+}
+
+/// <summary>
+/// Allowed action values for canceling subscription
+/// </summary>
+public static class CancelSubscriptionActionValues
+{
+    public const string DeleteFiles = "delete_files";
+    public const string KeepFiles = "keep_files";
+}
+
+/// <summary>
+/// Response DTO for cancel subscription action
+/// </summary>
+public class CancelSubscriptionResponse
+{
+    public int SubscriptionId { get; set; }
+    public bool IsEnabled { get; set; }
+    public string Action { get; set; } = CancelSubscriptionActionValues.KeepFiles;
+    public int TotalTorrents { get; set; }
+    public int ProcessedCount { get; set; }
+    public int FailedCount { get; set; }
+}
+
+/// <summary>
 /// Response DTO for subscription information
 /// </summary>
 public class SubscriptionResponse
@@ -128,6 +161,13 @@ public class DownloadHistoryResponse
     public DateTime PublishedAt { get; set; }
     public DateTime DiscoveredAt { get; set; }
     public DateTime? DownloadedAt { get; set; }
+    public string Source { get; set; } = string.Empty;
+    public double Progress { get; set; }
+    public long? DownloadSpeed { get; set; }
+    public int? Eta { get; set; }
+    public int? NumSeeds { get; set; }
+    public int? NumLeechers { get; set; }
+    public DateTime? LastSyncedAt { get; set; }
 
     /// <summary>
     /// Human-readable file size
@@ -149,6 +189,13 @@ public class DownloadHistoryResponse
             PublishedAt = entity.PublishedAt,
             DiscoveredAt = entity.DiscoveredAt,
             DownloadedAt = entity.DownloadedAt,
+            Source = entity.Source.ToString(),
+            Progress = entity.Progress,
+            DownloadSpeed = entity.DownloadSpeed,
+            Eta = entity.Eta,
+            NumSeeds = entity.NumSeeds,
+            NumLeechers = entity.NumLeechers,
+            LastSyncedAt = entity.LastSyncedAt,
             FileSizeDisplay = FormatFileSize(entity.FileSize)
         };
     }
@@ -168,6 +215,43 @@ public class DownloadHistoryResponse
         }
 
         return $"{len:0.##} {sizes[order]}";
+    }
+}
+
+/// <summary>
+/// Response DTO for anime that has manual download tasks but is not subscribed
+/// </summary>
+public class ManualDownloadAnimeResponse
+{
+    public int BangumiId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? MikanBangumiId { get; set; }
+    public int TaskCount { get; set; }
+    public DateTime LastTaskAt { get; set; }
+}
+
+/// <summary>
+/// Lightweight DTO returning only hash + metadata for a download task.
+/// The frontend uses this to correlate with qBittorrent polling data.
+/// </summary>
+public class TaskHashResponse
+{
+    public string Hash { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public DateTime PublishedAt { get; set; }
+    public long? FileSize { get; set; }
+    public bool IsCompleted { get; set; }
+
+    public static TaskHashResponse FromEntity(Data.Entities.DownloadHistoryEntity entity)
+    {
+        return new TaskHashResponse
+        {
+            Hash = entity.TorrentHash,
+            Title = entity.Title,
+            PublishedAt = entity.PublishedAt,
+            FileSize = entity.FileSize,
+            IsCompleted = entity.Status == Data.Entities.DownloadStatus.Completed
+        };
     }
 }
 

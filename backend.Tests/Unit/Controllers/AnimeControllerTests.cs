@@ -49,8 +49,7 @@ public class AnimeControllerTests
         };
     }
 
-    // Valid test tokens (Bangumi: 20+ chars, TMDB: 100+ chars)
-    private const string ValidBangumiToken = "valid_bangumi_token_12345678901234567890";
+    // Valid test token (TMDB: 100+ chars)
     private static readonly string ValidTmdbToken = new string('x', 110); // TMDB needs 100+ chars
 
     [Fact]
@@ -63,15 +62,11 @@ public class AnimeControllerTests
             count: 5);
 
         _tokenStorageMock
-            .Setup(t => t.GetBangumiTokenAsync())
-            .ReturnsAsync(ValidBangumiToken);
-        _tokenStorageMock
             .Setup(t => t.GetTmdbTokenAsync())
             .ReturnsAsync(ValidTmdbToken);
 
         _aggregationServiceMock
             .Setup(s => s.GetTodayAnimeEnrichedAsync(
-                It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
@@ -95,21 +90,17 @@ public class AnimeControllerTests
         var response = TestDataFactory.CreateAnimeListResponse();
 
         _tokenStorageMock
-            .Setup(t => t.GetBangumiTokenAsync())
-            .ReturnsAsync(ValidBangumiToken);
-        _tokenStorageMock
             .Setup(t => t.GetTmdbTokenAsync())
-            .ReturnsAsync((string?)null);
+            .ReturnsAsync(ValidTmdbToken);
 
         _aggregationServiceMock
             .Setup(s => s.GetTodayAnimeEnrichedAsync(
-                It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
 
         // Set header token (should be ignored because stored token has priority)
-        _sut.ControllerContext.HttpContext.Request.Headers["X-Bangumi-Token"] = "header-token-ignored";
+        _sut.ControllerContext.HttpContext.Request.Headers["X-TMDB-Token"] = "header-token-ignored";
 
         // Act
         await _sut.GetTodayAnime();
@@ -117,8 +108,7 @@ public class AnimeControllerTests
         // Assert - stored token is used, not header token
         _aggregationServiceMock.Verify(
             s => s.GetTodayAnimeEnrichedAsync(
-                ValidBangumiToken,
-                It.IsAny<string?>(),
+                ValidTmdbToken,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -130,21 +120,17 @@ public class AnimeControllerTests
         var response = TestDataFactory.CreateAnimeListResponse();
 
         _tokenStorageMock
-            .Setup(t => t.GetBangumiTokenAsync())
-            .ReturnsAsync((string?)null);
-        _tokenStorageMock
             .Setup(t => t.GetTmdbTokenAsync())
             .ReturnsAsync((string?)null);
 
         _aggregationServiceMock
             .Setup(s => s.GetTodayAnimeEnrichedAsync(
-                It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
 
         // Set header token (will be used since no stored token)
-        _sut.ControllerContext.HttpContext.Request.Headers["X-Bangumi-Token"] = ValidBangumiToken;
+        _sut.ControllerContext.HttpContext.Request.Headers["X-TMDB-Token"] = ValidTmdbToken;
 
         // Act
         await _sut.GetTodayAnime();
@@ -152,8 +138,7 @@ public class AnimeControllerTests
         // Assert - The header token is used
         _aggregationServiceMock.Verify(
             s => s.GetTodayAnimeEnrichedAsync(
-                ValidBangumiToken,
-                It.IsAny<string?>(),
+                ValidTmdbToken,
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -176,15 +161,11 @@ public class AnimeControllerTests
         };
 
         _tokenStorageMock
-            .Setup(t => t.GetBangumiTokenAsync())
-            .ReturnsAsync(ValidBangumiToken);
-        _tokenStorageMock
             .Setup(t => t.GetTmdbTokenAsync())
             .ReturnsAsync((string?)null);
 
         _aggregationServiceMock
             .Setup(s => s.GetTodayAnimeEnrichedAsync(
-                It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
@@ -214,15 +195,11 @@ public class AnimeControllerTests
         };
 
         _tokenStorageMock
-            .Setup(t => t.GetBangumiTokenAsync())
-            .ReturnsAsync(ValidBangumiToken);
-        _tokenStorageMock
             .Setup(t => t.GetTmdbTokenAsync())
             .ReturnsAsync((string?)null);
 
         _aggregationServiceMock
             .Setup(s => s.GetTodayAnimeEnrichedAsync(
-                It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
@@ -242,15 +219,11 @@ public class AnimeControllerTests
         var response = TestDataFactory.CreateAnimeListResponse();
 
         _tokenStorageMock
-            .Setup(t => t.GetBangumiTokenAsync())
-            .ReturnsAsync(ValidBangumiToken);
-        _tokenStorageMock
             .Setup(t => t.GetTmdbTokenAsync())
             .ReturnsAsync((string?)null);
 
         _aggregationServiceMock
             .Setup(s => s.GetTodayAnimeEnrichedAsync(
-                It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);

@@ -41,6 +41,13 @@ public class AnimeAggregationServiceTests
         _resilienceServiceMock = new Mock<IResilienceService>();
         _loggerMock = new Mock<ILogger<AnimeAggregationService>>();
 
+        _repositoryMock
+            .Setup(r => r.GetTopAnimeCacheAsync(It.IsAny<string>()))
+            .ReturnsAsync((TopAnimeCacheEntity?)null);
+        _repositoryMock
+            .Setup(r => r.SaveTopAnimeCacheAsync(It.IsAny<TopAnimeCacheEntity>()))
+            .Returns(Task.CompletedTask);
+
         _sut = new AnimeAggregationService(
             _bangumiClientMock.Object,
             _tmdbClientMock.Object,
@@ -142,7 +149,7 @@ public class AnimeAggregationServiceTests
             .ReturnsAsync(TestDataFactory.CreateAniListAnimeInfo());
 
         // Act
-        var result = await _sut.GetTodayAnimeEnrichedAsync("test-token", "tmdb-token");
+        var result = await _sut.GetTodayAnimeEnrichedAsync("tmdb-token");
 
         // Assert
         result.Success.Should().BeTrue();
@@ -227,7 +234,7 @@ public class AnimeAggregationServiceTests
             .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
 
         // Act - should not throw even with null token
-        var result = await _sut.GetTodayAnimeEnrichedAsync(null, null);
+        var result = await _sut.GetTodayAnimeEnrichedAsync(null);
 
         // Assert
         Assert.NotNull(result);
@@ -251,10 +258,9 @@ public class AnimeAggregationServiceTests
             .ReturnsAsync((CreateEmptyJsonArray(), 0, true));
 
         // Act
-        await _sut.GetTodayAnimeEnrichedAsync("bangumi-token", "tmdb-token");
+        await _sut.GetTodayAnimeEnrichedAsync("tmdb-token");
 
         // Assert
-        _bangumiClientMock.Verify(b => b.SetToken("bangumi-token"), Times.Once);
         _tmdbClientMock.Verify(t => t.SetToken("tmdb-token"), Times.Once);
     }
 
@@ -538,6 +544,90 @@ public class AnimeAggregationServiceTests
         _bangumiClientMock.Verify(b => b.SearchByTitleAsync(It.IsAny<string>()), Times.Never);
         _tmdbClientMock.Verify(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
         _repositoryMock.Verify(r => r.SaveAnimeInfoAsync(It.IsAny<AnimeInfoEntity>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetTopAnimeFromAniListAsync_WhenPersistentCacheExists_ReturnsDatabaseSnapshot()
+    {
+        // Arrange
+        var cached = new List<AnimeInfoDto>
+        {
+            new()
+            {
+                BangumiId = "515759",
+                JpTitle = "葬送のフリーレン 第2期",
+                ChTitle = "葬送的芙莉莲 第二季",
+                EnTitle = "Frieren: Beyond Journey's End Season 2",
+                Images = new AnimeImagesDto
+                {
+                    Portrait = "https://example.com/p.jpg",
+                    Landscape = "https://example.com/l.jpg"
+                },
+                Score = "9.2"
+            }
+        };
+
+        _repositoryMock
+            .Setup(r => r.GetTopAnimeCacheAsync("top:anilist"))
+            .ReturnsAsync(new TopAnimeCacheEntity
+            {
+                Source = "top:anilist",
+                PayloadJson = JsonSerializer.Serialize(cached),
+                UpdatedAt = DateTime.UtcNow.AddHours(-1)
+            });
+
+        // Act
+        var result = await _sut.GetTopAnimeFromAniListAsync(limit: 10);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.DataSource.Should().Be(DataSource.Database);
+        result.Count.Should().Be(1);
+        result.Animes[0].BangumiId.Should().Be("515759");
+
+        _aniListClientMock.Verify(a => a.GetTrendingAnimeAsync(It.IsAny<int>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetTopAnimeFromAniListAsync_WhenApiSucceeds_PersistsTopCacheSnapshot()
+    {
+        // Arrange
+        _repositoryMock
+            .Setup(r => r.GetTopAnimeCacheAsync("top:anilist"))
+            .ReturnsAsync((TopAnimeCacheEntity?)null);
+
+        _aniListClientMock
+            .Setup(a => a.GetTrendingAnimeAsync(10))
+            .ReturnsAsync(new List<AniListAnimeInfo>
+            {
+                new()
+                {
+                    NativeTitle = "葬送のフリーレン",
+                    EnglishTitle = "Frieren: Beyond Journey's End",
+                    EnglishSummary = "summary",
+                    Score = "9.1",
+                    CoverUrl = "https://example.com/cover.jpg",
+                    BannerImage = "https://example.com/banner.jpg",
+                    OriSiteUrl = "https://anilist.co/anime/154587"
+                }
+            });
+
+        _bangumiClientMock
+            .Setup(b => b.SearchByTitleAsync(It.IsAny<string>()))
+            .ReturnsAsync(JsonDocument.Parse("{\"id\":459283,\"name_cn\":\"葬送的芙莉莲\",\"summary\":\"summary\"}").RootElement);
+
+        _tmdbClientMock
+            .Setup(t => t.GetAnimeSummaryAndBackdropAsync(It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync((TMDBAnimeInfo?)null);
+
+        // Act
+        var result = await _sut.GetTopAnimeFromAniListAsync(limit: 10);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        _repositoryMock.Verify(
+            r => r.SaveTopAnimeCacheAsync(It.Is<TopAnimeCacheEntity>(c => c.Source == "top:anilist")),
+            Times.Once);
     }
 
     [Fact]

@@ -297,6 +297,44 @@ public class AnimeRepository : IAnimeRepository
 
     #endregion
 
+    #region Top List Cache
+
+    public async Task<TopAnimeCacheEntity?> GetTopAnimeCacheAsync(string source)
+    {
+        var cache = await _context.TopAnimeCaches
+            .FirstOrDefaultAsync(c => c.Source == source);
+
+        if (cache != null)
+        {
+            _logger.LogDebug("Top anime cache hit for source {Source}", source);
+        }
+
+        return cache;
+    }
+
+    public async Task SaveTopAnimeCacheAsync(TopAnimeCacheEntity cache)
+    {
+        var existing = await _context.TopAnimeCaches
+            .FirstOrDefaultAsync(c => c.Source == cache.Source);
+
+        if (existing == null)
+        {
+            cache.UpdatedAt = DateTime.UtcNow;
+            _context.TopAnimeCaches.Add(cache);
+            _logger.LogInformation("Created top anime cache for source {Source}", cache.Source);
+        }
+        else
+        {
+            existing.PayloadJson = cache.PayloadJson;
+            existing.UpdatedAt = DateTime.UtcNow;
+            _logger.LogDebug("Updated top anime cache for source {Source}", cache.Source);
+        }
+
+        await _context.SaveChangesAsync();
+    }
+
+    #endregion
+
     #region Maintenance
 
     public async Task ClearAllAnimeDataAsync()
@@ -313,11 +351,15 @@ public class AnimeRepository : IAnimeRepository
         var scheduleCacheCount = await _context.DailyScheduleCaches.CountAsync();
         _context.DailyScheduleCaches.RemoveRange(_context.DailyScheduleCaches);
 
+        // Clear top list cache snapshots
+        var topCacheCount = await _context.TopAnimeCaches.CountAsync();
+        _context.TopAnimeCaches.RemoveRange(_context.TopAnimeCaches);
+
         await _context.SaveChangesAsync();
 
         _logger.LogWarning(
-            "Cleared all anime data: {AnimeInfo} anime info, {AnimeImages} anime images, {ScheduleCache} schedule caches",
-            animeInfoCount, animeImagesCount, scheduleCacheCount);
+            "Cleared all anime data: {AnimeInfo} anime info, {AnimeImages} anime images, {ScheduleCache} schedule caches, {TopCache} top list caches",
+            animeInfoCount, animeImagesCount, scheduleCacheCount, topCacheCount);
     }
 
     #endregion

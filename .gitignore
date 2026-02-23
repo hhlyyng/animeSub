@@ -32,7 +32,10 @@ obj/
 *.sln.docstates
 logs/
 appsettings.user.json
+appsettings.runtime.json
 .keys/
+.dotnet-home/
+.dotnet/
 
 # SQLite database files (but not source code in Data/)
 *.db
@@ -70,3 +73,15 @@ backend/Data/*.db-wal
 # Local backend runtime logs
 backend/backend.log
 backend/output.log
+
+# User uploads
+backend/Data/uploads/
+
+# Local audit notes
+audit_log/
+
+# =====================
+# Local Dev Tools & Data
+# =====================
+/tools/
+/data/

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using backend.Models.Dtos;
 using backend.Services.Interfaces;
@@ -9,6 +10,7 @@ namespace backend.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class SubscriptionController : ControllerBase
 {
     private readonly ISubscriptionService _subscriptionService;
@@ -43,6 +45,26 @@ public class SubscriptionController : ControllerBase
         {
             return NotFound(new { message = $"Subscription {id} not found" });
         }
+        return Ok(subscription);
+    }
+
+    /// <summary>
+    /// Get subscription by Bangumi ID
+    /// </summary>
+    [HttpGet("bangumi/{bangumiId:int}")]
+    public async Task<ActionResult<SubscriptionResponse>> GetByBangumiId([FromRoute] int bangumiId)
+    {
+        if (bangumiId <= 0)
+        {
+            return BadRequest(new { message = "Valid BangumiId is required" });
+        }
+
+        var subscription = await _subscriptionService.GetSubscriptionByBangumiIdAsync(bangumiId);
+        if (subscription == null)
+        {
+            return NotFound(new { message = $"Subscription for BangumiId {bangumiId} not found" });
+        }
+
         return Ok(subscription);
     }
 
@@ -146,6 +168,39 @@ public class SubscriptionController : ControllerBase
     }
 
     /// <summary>
+    /// Get lightweight task hashes for a subscription (for qBittorrent correlation)
+    /// </summary>
+    [HttpGet("{id}/task-hashes")]
+    public async Task<ActionResult<List<TaskHashResponse>>> GetTaskHashes(int id, [FromQuery] int limit = 300)
+    {
+        var subscription = await _subscriptionService.GetSubscriptionByIdAsync(id);
+        if (subscription == null)
+        {
+            return NotFound(new { message = $"Subscription {id} not found" });
+        }
+
+        var hashes = await _subscriptionService.GetTaskHashesAsync(id, limit);
+        return Ok(hashes);
+    }
+
+    /// <summary>
+    /// Get lightweight task hashes for manual downloads by Bangumi ID
+    /// </summary>
+    [HttpGet("manual-anime/{bangumiId:int}/task-hashes")]
+    public async Task<ActionResult<List<TaskHashResponse>>> GetManualAnimeTaskHashes(
+        [FromRoute] int bangumiId,
+        [FromQuery] int limit = 300)
+    {
+        if (bangumiId <= 0)
+        {
+            return BadRequest(new { message = "Valid BangumiId is required" });
+        }
+
+        var hashes = await _subscriptionService.GetManualTaskHashesAsync(bangumiId, limit);
+        return Ok(hashes);
+    }
+
+    /// <summary>
     /// Get download history for a subscription
     /// </summary>
     [HttpGet("{id}/history")]
@@ -158,6 +213,98 @@ public class SubscriptionController : ControllerBase
         }
 
         var history = await _subscriptionService.GetDownloadHistoryAsync(id, limit);
+        return Ok(history);
+    }
+
+    /// <summary>
+    /// Ensure a subscription exists and is enabled
+    /// </summary>
+    [HttpPost("ensure")]
+    public async Task<ActionResult<SubscriptionResponse>> Ensure([FromBody] CreateSubscriptionRequest request)
+    {
+        if (request.BangumiId <= 0)
+        {
+            return BadRequest(new { message = "Valid BangumiId is required" });
+        }
+
+        try
+        {
+            var subscription = await _subscriptionService.EnsureSubscriptionAsync(request);
+            return Ok(subscription);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { message = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Cancel subscription and optionally delete related files
+    /// </summary>
+    [HttpPost("{id:int}/cancel")]
+    public async Task<ActionResult<CancelSubscriptionResponse>> Cancel(
+        [FromRoute] int id,
+        [FromBody] CancelSubscriptionRequest request)
+    {
+        if (id <= 0)
+        {
+            return BadRequest(new { message = "Valid subscription id is required" });
+        }
+
+        if (request == null)
+        {
+            return BadRequest(new { message = "Request body is required" });
+        }
+
+        var action = request.Action?.Trim().ToLowerInvariant();
+        if (action != CancelSubscriptionActionValues.DeleteFiles &&
+            action != CancelSubscriptionActionValues.KeepFiles)
+        {
+            return BadRequest(new { message = "Action must be delete_files or keep_files" });
+        }
+
+        var result = await _subscriptionService.CancelSubscriptionAsync(
+            id,
+            deleteFiles: action == CancelSubscriptionActionValues.DeleteFiles);
+
+        if (result == null)
+        {
+            return NotFound(new { message = $"Subscription {id} not found" });
+        }
+
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Get anime list that has manual download tasks but no subscription record
+    /// </summary>
+    [HttpGet("manual-anime")]
+    public async Task<ActionResult<List<ManualDownloadAnimeResponse>>> GetManualAnime([FromQuery] int limit = 200)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var results = await _subscriptionService.GetManualOnlyDownloadAnimesAsync(safeLimit);
+        return Ok(results);
+    }
+
+    /// <summary>
+    /// Get manual download history by anime Bangumi ID
+    /// </summary>
+    [HttpGet("manual-anime/{bangumiId:int}/history")]
+    public async Task<ActionResult<List<DownloadHistoryResponse>>> GetManualAnimeHistory(
+        [FromRoute] int bangumiId,
+        [FromQuery] int limit = 50)
+    {
+        if (bangumiId <= 0)
+        {
+            return BadRequest(new { message = "Valid BangumiId is required" });
+        }
+
+        var safeLimit = Math.Clamp(limit, 1, 500);
+        var history = await _subscriptionService.GetManualDownloadHistoryAsync(bangumiId, safeLimit);
         return Ok(history);
     }
 }

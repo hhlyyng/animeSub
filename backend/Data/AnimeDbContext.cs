@@ -16,6 +16,9 @@ public class AnimeDbContext : DbContext
     public DbSet<DownloadHistoryEntity> DownloadHistory { get; set; }
     public DbSet<MikanFeedCacheEntity> MikanFeedCaches { get; set; }
     public DbSet<MikanFeedItemEntity> MikanFeedItems { get; set; }
+    public DbSet<TopAnimeCacheEntity> TopAnimeCaches { get; set; }
+    public DbSet<UserEntity> Users { get; set; }
+    public DbSet<MikanSubgroupEntity> MikanSubgroups { get; set; }
 
     public AnimeDbContext(DbContextOptions<AnimeDbContext> options)
         : base(options)
@@ -54,7 +57,7 @@ public class AnimeDbContext : DbContext
             entity.HasKey(e => e.Id);
 
             // Indexes for common queries
-            entity.HasIndex(e => e.BangumiId);
+            entity.HasIndex(e => e.BangumiId).IsUnique();
             entity.HasIndex(e => e.MikanBangumiId);
             entity.HasIndex(e => e.IsEnabled);
 
@@ -77,6 +80,7 @@ public class AnimeDbContext : DbContext
             entity.HasIndex(e => e.SubscriptionId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.Source);
+            entity.HasIndex(e => e.AnimeBangumiId);
             entity.HasIndex(e => e.LastSyncedAt);
         });
 
@@ -99,6 +103,28 @@ public class AnimeDbContext : DbContext
             entity.HasIndex(e => e.MikanBangumiId);
             entity.HasIndex(e => e.TorrentHash);
             entity.HasIndex(e => e.PublishedAt);
+        });
+
+        // Configure top anime list cache snapshots
+        modelBuilder.Entity<TopAnimeCacheEntity>(entity =>
+        {
+            entity.HasKey(e => e.Source);
+            entity.HasIndex(e => e.UpdatedAt);
+        });
+
+        // Configure User
+        modelBuilder.Entity<UserEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Username).IsUnique();
+        });
+
+        // Configure Mikan subgroup cache
+        modelBuilder.Entity<MikanSubgroupEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.MikanBangumiId, e.SubgroupId }).IsUnique();
+            entity.HasIndex(e => e.MikanBangumiId);
         });
     }
 }

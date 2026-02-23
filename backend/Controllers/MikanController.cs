@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +20,7 @@ namespace backend.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
+[Authorize]
 public class MikanController : ControllerBase
 {
     private readonly IMikanClient _mikanClient;
@@ -118,6 +120,103 @@ public class MikanController : ControllerBase
             stopwatch.Stop();
             _logger.LogError(ex, "Search failed for: {Title} (elapsed: {Elapsed}ms)", title, stopwatch.ElapsedMilliseconds);
             return StatusCode(500, new { message = $"Search failed: {ex.Message}" });
+        }
+    }
+
+    /// <summary>
+    /// Search for anime entries on Mikan (returns all matching entries with images)
+    /// </summary>
+    /// <param name="title">Anime title to search for</param>
+    /// <returns>List of matching anime entries</returns>
+    [HttpGet("search-entries")]
+    public async Task<ActionResult<List<MikanAnimeEntry>>> SearchEntries([FromQuery] string title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+        {
+            return BadRequest(new { message = "Title is required" });
+        }
+
+        try
+        {
+            var entries = await _mikanClient.SearchAnimeEntriesAsync(title);
+            return Ok(entries);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "SearchEntries failed for title: {Title}", title);
+            return StatusCode(500, new { message = $"Search failed: {ex.Message}" });
+        }
+    }
+
+    /// <summary>
+    /// Correct the Mikan Bangumi ID for a given Bangumi ID
+    /// </summary>
+    /// <param name="request">Correction request with bangumiId and mikanBangumiId</param>
+    /// <returns>Success or failure</returns>
+    [HttpPost("correct-bangumi-id")]
+    public async Task<ActionResult> CorrectBangumiId([FromBody] CorrectMikanBangumiIdRequest request)
+    {
+        if (request.BangumiId <= 0)
+        {
+            return BadRequest(new { message = "Valid BangumiId is required" });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.MikanBangumiId))
+        {
+            return BadRequest(new { message = "MikanBangumiId is required" });
+        }
+
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+            var anime = await db.AnimeInfos.FirstOrDefaultAsync(a => a.BangumiId == request.BangumiId);
+
+            if (anime == null)
+            {
+                return NotFound(new { message = $"Anime with BangumiId {request.BangumiId} not found" });
+            }
+
+            anime.MikanBangumiId = request.MikanBangumiId.Trim();
+            anime.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+
+            _logger.LogInformation(
+                "Corrected MikanBangumiId for BangumiId={BangumiId} to {MikanBangumiId}",
+                request.BangumiId,
+                request.MikanBangumiId);
+
+            return Ok(new { message = "Correction saved", bangumiId = request.BangumiId, mikanBangumiId = request.MikanBangumiId });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to correct MikanBangumiId for BangumiId={BangumiId}", request.BangumiId);
+            return StatusCode(500, new { message = "Failed to save correction" });
+        }
+    }
+
+    /// <summary>
+    /// Get subgroup name-to-ID mapping for a Mikan anime
+    /// </summary>
+    /// <param name="mikanBangumiId">Mikan Bangumi ID</param>
+    /// <returns>List of subgroups with their numeric IDs</returns>
+    [HttpGet("subgroups")]
+    public async Task<ActionResult<List<MikanSubgroupInfo>>> GetSubgroups([FromQuery] string mikanBangumiId)
+    {
+        if (string.IsNullOrWhiteSpace(mikanBangumiId))
+        {
+            return BadRequest(new { message = "Mikan Bangumi ID is required" });
+        }
+
+        try
+        {
+            var subgroups = await _mikanClient.GetSubgroupsAsync(mikanBangumiId);
+            return Ok(subgroups);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get subgroups for Mikan ID: {MikanBangumiId}", mikanBangumiId);
+            return StatusCode(500, new { message = "Failed to get subgroups" });
         }
     }
 
@@ -258,16 +357,59 @@ public class MikanController : ControllerBase
         var torrentInput = !string.IsNullOrWhiteSpace(request.MagnetLink)
             ? request.MagnetLink
             : request.TorrentUrl!;
+        int? animeBangumiId = request.BangumiId.HasValue && request.BangumiId.Value > 0
+            ? request.BangumiId.Value
+            : null;
+        var animeMikanBangumiId = string.IsNullOrWhiteSpace(request.MikanBangumiId)
+            ? null
+            : request.MikanBangumiId.Trim();
+        var animeTitle = string.IsNullOrWhiteSpace(request.AnimeTitle)
+            ? request.Title
+            : request.AnimeTitle.Trim();
 
         using var scope = _serviceProvider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
 
         var existingDownload = await db.DownloadHistory
-            .AsNoTracking()
             .FirstOrDefaultAsync(d => d.TorrentHash == normalizedHash);
 
         if (existingDownload != null)
         {
+            var shouldUpdateExisting = false;
+            if (!existingDownload.AnimeBangumiId.HasValue && animeBangumiId.HasValue)
+            {
+                existingDownload.AnimeBangumiId = animeBangumiId.Value;
+                shouldUpdateExisting = true;
+            }
+
+            if (string.IsNullOrWhiteSpace(existingDownload.AnimeMikanBangumiId) &&
+                !string.IsNullOrWhiteSpace(animeMikanBangumiId))
+            {
+                existingDownload.AnimeMikanBangumiId = animeMikanBangumiId;
+                shouldUpdateExisting = true;
+            }
+
+            if (string.IsNullOrWhiteSpace(existingDownload.AnimeTitle) &&
+                !string.IsNullOrWhiteSpace(animeTitle))
+            {
+                existingDownload.AnimeTitle = animeTitle;
+                shouldUpdateExisting = true;
+            }
+
+            // Re-associate with subscription if download was previously manual
+            if (request.SubscriptionId.HasValue && request.SubscriptionId.Value > 0 &&
+                existingDownload.Source == DownloadSource.Manual)
+            {
+                existingDownload.SubscriptionId = request.SubscriptionId.Value;
+                existingDownload.Source = DownloadSource.Subscription;
+                shouldUpdateExisting = true;
+            }
+
+            if (shouldUpdateExisting)
+            {
+                await db.SaveChangesAsync();
+            }
+
             return Ok(new
             {
                 message = "Download already exists",
@@ -275,6 +417,10 @@ public class MikanController : ControllerBase
                 alreadyExists = true
             });
         }
+
+        // Determine source: subscription-triggered or manual
+        var isSubscriptionDownload = request.SubscriptionId.HasValue && request.SubscriptionId.Value > 0;
+        var downloadSource = isSubscriptionDownload ? DownloadSource.Subscription : DownloadSource.Manual;
 
         bool success;
         try
@@ -284,11 +430,11 @@ public class MikanController : ControllerBase
                 normalizedHash,
                 request.Title,
                 0,
-                DownloadSource.Manual);
+                downloadSource);
         }
         catch (QBittorrentUnavailableException ex)
         {
-            _logger.LogWarning(ex, "qBittorrent unavailable while pushing manual download {Hash}", normalizedHash);
+            _logger.LogWarning(ex, "qBittorrent unavailable while pushing download {Hash}", normalizedHash);
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new
             {
                 message = ex.Message,
@@ -302,16 +448,27 @@ public class MikanController : ControllerBase
             return StatusCode(500, new { message = "Failed to add torrent to qBittorrent" });
         }
 
-        var manualSubscriptionId = await EnsureManualSubscriptionAsync(db);
+        int subscriptionId;
+        if (isSubscriptionDownload)
+        {
+            subscriptionId = request.SubscriptionId!.Value;
+        }
+        else
+        {
+            subscriptionId = await EnsureManualSubscriptionAsync(db);
+        }
 
         var download = new DownloadHistoryEntity
         {
-            SubscriptionId = manualSubscriptionId,
+            SubscriptionId = subscriptionId,
             TorrentUrl = torrentInput,
             TorrentHash = normalizedHash,
             Title = request.Title,
             Status = DownloadStatus.Pending,
-            Source = DownloadSource.Manual,
+            Source = downloadSource,
+            AnimeBangumiId = animeBangumiId,
+            AnimeMikanBangumiId = animeMikanBangumiId,
+            AnimeTitle = animeTitle,
             PublishedAt = DateTime.UtcNow,
             DiscoveredAt = DateTime.UtcNow,
             DownloadedAt = DateTime.UtcNow,
@@ -321,7 +478,8 @@ public class MikanController : ControllerBase
         db.DownloadHistory.Add(download);
         await db.SaveChangesAsync();
 
-        _logger.LogInformation("Manual download added: Hash={Hash}, Source={Source}", normalizedHash, DownloadSource.Manual);
+        _logger.LogInformation("Download added: Hash={Hash}, Source={Source}, SubscriptionId={SubId}",
+            normalizedHash, downloadSource, subscriptionId);
         return Ok(new { message = "Download task queued successfully", hash = normalizedHash });
     }
 
@@ -342,12 +500,21 @@ public class MikanController : ControllerBase
                 .GroupBy(t => NormalizeHash(t.Hash))
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-            var torrents = await db.DownloadHistory
-                .Where(d => d.Source == DownloadSource.Manual)
-                .OrderByDescending(d => d.DownloadedAt ?? d.DiscoveredAt)
+            // Return all download sources (manual + subscription), deduplicated by normalized hash.
+            var historyCandidates = await db.DownloadHistory
+                .Where(d => !string.IsNullOrWhiteSpace(d.TorrentHash))
+                .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
                 .ToListAsync();
 
-            var response = torrents.Select(d =>
+            var latestByHash = historyCandidates
+                .GroupBy(d => NormalizeHash(d.TorrentHash), StringComparer.OrdinalIgnoreCase)
+                .Select(group => group
+                    .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
+                    .First())
+                .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
+                .ToList();
+
+            var response = latestByHash.Select(d =>
             {
                 var normalizedHash = NormalizeHash(d.TorrentHash);
                 var hasRealtime = qbByHash.TryGetValue(normalizedHash, out var qbTorrent);
@@ -370,7 +537,8 @@ public class MikanController : ControllerBase
                     downloadSpeed,
                     eta,
                     numSeeds,
-                    numLeechers
+                    numLeechers,
+                    source = d.Source.ToString().ToLowerInvariant()
                 };
             }).ToList();
 

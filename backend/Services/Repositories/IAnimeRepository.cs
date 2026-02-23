@@ -26,6 +26,10 @@ public interface IAnimeRepository
     Task SaveAnimeImagesAsync(AnimeImagesEntity images);
     Task<List<AnimeImagesEntity>> GetAnimeImagesBatchAsync(List<int> bangumiIds);
 
+    // Top list cache snapshots
+    Task<TopAnimeCacheEntity?> GetTopAnimeCacheAsync(string source);
+    Task SaveTopAnimeCacheAsync(TopAnimeCacheEntity cache);
+
     // Maintenance
     Task ClearAllAnimeDataAsync();
 }

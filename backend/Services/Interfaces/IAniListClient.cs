@@ -21,6 +21,18 @@ public interface IAniListClient
     Task<List<AniListAnimeInfo>> GetTrendingAnimeAsync(int limit = 10);
 
     /// <summary>
+    /// Get anime sorted by popularity from AniList
+    /// </summary>
+    /// <param name="limit">Number of anime to retrieve</param>
+    Task<List<AniListAnimeInfo>> GetAnimeByPopularityAsync(int limit = 50);
+
+    /// <summary>
+    /// Get anime sorted by score from AniList
+    /// </summary>
+    /// <param name="limit">Number of anime to retrieve</param>
+    Task<List<AniListAnimeInfo>> GetAnimeByScoreAsync(int limit = 50);
+
+    /// <summary>
     /// Search an anime media by title and return season/relations payload for episode offset inference.
     /// </summary>
     /// <param name="title">Anime title query</param>

@@ -44,7 +44,8 @@ public class DownloadProgressSyncService : BackgroundService
         var dbContext = scope.ServiceProvider.GetRequiredService<Data.AnimeDbContext>();
         var qbittorrentService = scope.ServiceProvider.GetRequiredService<Services.Interfaces.IQBittorrentService>();
 
-        var qbTorrents = await qbittorrentService.GetTorrentsAsync();
+        // Filter by "anime" category to reduce unnecessary processing
+        var qbTorrents = await qbittorrentService.GetTorrentsAsync("anime");
 
         if (qbTorrents.Count == 0)
         {
@@ -52,14 +53,28 @@ public class DownloadProgressSyncService : BackgroundService
             return;
         }
 
+        // Batch load all download history with hashes into a dictionary (case-insensitive)
+        var allHistory = await dbContext.DownloadHistory
+            .Where(d => d.TorrentHash != null && d.TorrentHash != "")
+            .ToListAsync();
+
+        var historyByHash = new Dictionary<string, Data.Entities.DownloadHistoryEntity>(StringComparer.OrdinalIgnoreCase);
+        foreach (var h in allHistory)
+        {
+            var key = h.TorrentHash!.Trim().ToUpperInvariant();
+            historyByHash.TryAdd(key, h);
+        }
+
         var syncedCount = 0;
 
         foreach (var qbTorrent in qbTorrents)
         {
-            var existing = await dbContext.DownloadHistory
-                .FirstOrDefaultAsync(d => d.TorrentHash == qbTorrent.Hash);
+            if (string.IsNullOrEmpty(qbTorrent.Hash))
+                continue;
 
-            if (existing != null)
+            var normalizedHash = qbTorrent.Hash.Trim().ToUpperInvariant();
+
+            if (historyByHash.TryGetValue(normalizedHash, out var existing))
             {
                 var progressPercent = ToProgressPercent(qbTorrent.Progress);
 

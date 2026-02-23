@@ -103,13 +103,13 @@ public class QBittorrentService
 // /api/v2/torrents/info DTO（可按需扩展/调整）
 public class TorrentInfo
 {
-    public string  Hash     { get; set; } = default!;
-    public string  Name     { get; set; } = default!;
-    public long    Size     { get; set; }
-    public double  Progress { get; set; }      // 0..1
-    public string  State    { get; set; } = default!;
-    public long    Dlspeed  { get; set; }
-    public long    Upspeed  { get; set; }
-    public int     NumSeeds { get; set; }
-    public int     NumLeechs{ get; set; }
+    public string Hash { get; set; } = default!;
+    public string Name { get; set; } = default!;
+    public long Size { get; set; }
+    public double Progress { get; set; }      // 0..1
+    public string State { get; set; } = default!;
+    public long Dlspeed { get; set; }
+    public long Upspeed { get; set; }
+    public int NumSeeds { get; set; }
+    public int NumLeechs { get; set; }
 }

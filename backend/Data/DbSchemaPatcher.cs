@@ -25,6 +25,9 @@ public static class DbSchemaPatcher
             await EnsureColumnAsync(connection, logger, "AnimeInfo", "MikanBangumiId", "TEXT NULL", cancellationToken);
 
             await EnsureColumnAsync(connection, logger, "DownloadHistory", "Source", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+            await EnsureColumnAsync(connection, logger, "DownloadHistory", "AnimeBangumiId", "INTEGER NULL", cancellationToken);
+            await EnsureColumnAsync(connection, logger, "DownloadHistory", "AnimeMikanBangumiId", "TEXT NULL", cancellationToken);
+            await EnsureColumnAsync(connection, logger, "DownloadHistory", "AnimeTitle", "TEXT NULL", cancellationToken);
             await EnsureColumnAsync(connection, logger, "DownloadHistory", "Progress", "REAL NOT NULL DEFAULT 0", cancellationToken);
             await EnsureColumnAsync(connection, logger, "DownloadHistory", "DownloadSpeed", "INTEGER NULL", cancellationToken);
             await EnsureColumnAsync(connection, logger, "DownloadHistory", "Eta", "INTEGER NULL", cancellationToken);
@@ -76,11 +79,26 @@ public static class DbSchemaPatcher
 
             await ExecuteNonQueryAsync(
                 connection,
+                """
+                CREATE TABLE IF NOT EXISTS "TopAnimeCache" (
+                    "Source" TEXT NOT NULL CONSTRAINT "PK_TopAnimeCache" PRIMARY KEY,
+                    "PayloadJson" TEXT NOT NULL,
+                    "UpdatedAt" TEXT NOT NULL
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
                 "CREATE INDEX IF NOT EXISTS IX_AnimeInfo_MikanBangumiId ON AnimeInfo(MikanBangumiId);",
                 cancellationToken);
             await ExecuteNonQueryAsync(
                 connection,
                 "CREATE INDEX IF NOT EXISTS IX_DownloadHistory_Source ON DownloadHistory(Source);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_DownloadHistory_AnimeBangumiId ON DownloadHistory(AnimeBangumiId);",
                 cancellationToken);
             await ExecuteNonQueryAsync(
                 connection,
@@ -101,6 +119,69 @@ public static class DbSchemaPatcher
             await ExecuteNonQueryAsync(
                 connection,
                 "CREATE INDEX IF NOT EXISTS IX_MikanFeedItem_PublishedAt ON MikanFeedItem(PublishedAt);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_TopAnimeCache_UpdatedAt ON TopAnimeCache(UpdatedAt);",
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                """
+                CREATE TABLE IF NOT EXISTS "Users" (
+                    "Id" INTEGER NOT NULL CONSTRAINT "PK_Users" PRIMARY KEY AUTOINCREMENT,
+                    "Username" TEXT NOT NULL,
+                    "PasswordHash" TEXT NOT NULL,
+                    "CreatedAt" TEXT NOT NULL
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS IX_Users_Username ON Users(Username);",
+                cancellationToken);
+
+            // Mikan subgroup cache table
+            await ExecuteNonQueryAsync(
+                connection,
+                """
+                CREATE TABLE IF NOT EXISTS "MikanSubgroups" (
+                    "Id" INTEGER NOT NULL CONSTRAINT "PK_MikanSubgroups" PRIMARY KEY AUTOINCREMENT,
+                    "MikanBangumiId" TEXT NOT NULL,
+                    "SubgroupId" TEXT NOT NULL,
+                    "SubgroupName" TEXT NOT NULL,
+                    "UpdatedAt" TEXT NOT NULL
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS IX_MikanSubgroups_BangumiId_SubgroupId ON MikanSubgroups(MikanBangumiId, SubgroupId);",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE INDEX IF NOT EXISTS IX_MikanSubgroups_MikanBangumiId ON MikanSubgroups(MikanBangumiId);",
+                cancellationToken);
+
+            // Fix F: Unique constraint on Subscriptions.BangumiId
+            // First clean up any duplicate BangumiId rows (keep the one with the largest Id)
+            await ExecuteNonQueryAsync(
+                connection,
+                """
+                DELETE FROM Subscriptions
+                WHERE Id NOT IN (
+                    SELECT MAX(Id) FROM Subscriptions GROUP BY BangumiId
+                ) AND BangumiId IN (
+                    SELECT BangumiId FROM Subscriptions GROUP BY BangumiId HAVING COUNT(*) > 1
+                );
+                """,
+                cancellationToken);
+
+            await ExecuteNonQueryAsync(
+                connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS IX_Subscriptions_BangumiId_Unique ON Subscriptions(BangumiId);",
                 cancellationToken);
         }
         finally

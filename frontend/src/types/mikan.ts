@@ -33,6 +33,7 @@ export interface MikanFeedResponse {
   latestPublishedAt?: string | null;
   latestTitle?: string | null;
   episodeOffset?: number;
+  subgroupMapping?: MikanSubgroupInfo[];
 }
 
 export interface ParsedRssItem {
@@ -62,6 +63,21 @@ export interface DownloadTorrentRequest {
   torrentUrl?: string;
   title: string;
   torrentHash: string;
+  bangumiId?: number;
+  mikanBangumiId?: string;
+  animeTitle?: string;
+  subscriptionId?: number;
+}
+
+export interface MikanAnimeEntry {
+  mikanBangumiId: string;
+  title: string;
+  imageUrl: string;
+}
+
+export interface MikanSubgroupInfo {
+  subgroupId: string;
+  name: string;
 }
 
 export interface QBTorrentInfo {

@@ -25,6 +25,7 @@ public class SubscriptionRepository : ISubscriptionRepository
     public async Task<List<SubscriptionEntity>> GetAllSubscriptionsAsync()
     {
         return await _context.Subscriptions
+            .Where(s => s.BangumiId > 0)
             .OrderByDescending(s => s.CreatedAt)
             .ToListAsync();
     }
@@ -32,8 +33,8 @@ public class SubscriptionRepository : ISubscriptionRepository
     public async Task<List<SubscriptionEntity>> GetEnabledSubscriptionsAsync()
     {
         return await _context.Subscriptions
-            .Where(s => s.IsEnabled)
-            .OrderByDescending(s => s.CreatedAt)
+            .Where(s => s.IsEnabled && s.BangumiId > 0)
+            .OrderBy(s => s.LastCheckedAt ?? DateTime.MinValue)
             .ToListAsync();
     }
 
@@ -100,6 +101,31 @@ public class SubscriptionRepository : ISubscriptionRepository
             .ToListAsync();
     }
 
+    public async Task<List<DownloadHistoryEntity>> GetAllDownloadHistoryBySubscriptionIdAsync(int subscriptionId)
+    {
+        return await _context.DownloadHistory
+            .Where(d => d.SubscriptionId == subscriptionId)
+            .OrderByDescending(d => d.DiscoveredAt)
+            .ToListAsync();
+    }
+
+    public async Task<List<DownloadHistoryEntity>> GetManualDownloadHistoryByBangumiIdAsync(int bangumiId, int limit = 50)
+    {
+        return await _context.DownloadHistory
+            .Where(d => d.Source == DownloadSource.Manual && d.AnimeBangumiId == bangumiId)
+            .OrderByDescending(d => d.DiscoveredAt)
+            .Take(limit)
+            .ToListAsync();
+    }
+
+    public async Task<List<DownloadHistoryEntity>> GetManualDownloadsWithAnimeContextAsync()
+    {
+        return await _context.DownloadHistory
+            .Where(d => d.Source == DownloadSource.Manual && d.AnimeBangumiId.HasValue && d.AnimeBangumiId > 0)
+            .OrderByDescending(d => d.LastSyncedAt ?? d.DownloadedAt ?? d.DiscoveredAt)
+            .ToListAsync();
+    }
+
     public async Task<DownloadHistoryEntity?> GetDownloadByHashAsync(string torrentHash)
     {
         return await _context.DownloadHistory
@@ -110,6 +136,24 @@ public class SubscriptionRepository : ISubscriptionRepository
     {
         return await _context.DownloadHistory
             .AnyAsync(d => d.TorrentHash == torrentHash);
+    }
+
+    public async Task<HashSet<string>> GetExistingHashesAsync(IEnumerable<string> hashes)
+    {
+        var hashList = hashes.ToList();
+        if (hashList.Count == 0)
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Only treat Downloading/Completed as "already handled".
+        // Pending/Failed items should be retried on next poll.
+        var existing = await _context.DownloadHistory
+            .Where(d => d.TorrentHash != null
+                && hashList.Contains(d.TorrentHash)
+                && (d.Status == DownloadStatus.Downloading || d.Status == DownloadStatus.Completed))
+            .Select(d => d.TorrentHash!)
+            .ToListAsync();
+
+        return new HashSet<string>(existing, StringComparer.OrdinalIgnoreCase);
     }
 
     public async Task<DownloadHistoryEntity> CreateDownloadHistoryAsync(DownloadHistoryEntity history)
@@ -139,6 +183,21 @@ public class SubscriptionRepository : ISubscriptionRepository
             .Where(d => d.Status == DownloadStatus.Pending)
             .OrderBy(d => d.DiscoveredAt)
             .ToListAsync();
+    }
+
+    public async Task ClearDownloadHistoryAsync(int subscriptionId)
+    {
+        var records = await _context.DownloadHistory
+            .Where(d => d.SubscriptionId == subscriptionId)
+            .ToListAsync();
+
+        if (records.Count > 0)
+        {
+            _context.DownloadHistory.RemoveRange(records);
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("Cleared {Count} download history records for subscription {SubscriptionId}",
+                records.Count, subscriptionId);
+        }
     }
 
     #endregion

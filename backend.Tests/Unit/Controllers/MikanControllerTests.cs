@@ -739,6 +739,32 @@ public class MikanControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task GetTorrents_WhenSubscriptionSourceExists_ReturnsSourceAsSubscription()
+    {
+        // Arrange
+        const string hash = "SUBSOURCE001";
+        await SeedSubscriptionDownloadAsync(hash, DownloadStatus.Downloading);
+
+        _qbittorrentServiceMock
+            .Setup(s => s.GetTorrentsAsync(null))
+            .ReturnsAsync(new List<QBTorrentInfo>());
+
+        // Act
+        var result = await _sut.GetTorrents();
+
+        // Assert
+        var ok = result.Should().BeOfType<OkObjectResult>().Subject;
+        var json = JsonSerializer.Serialize(ok.Value);
+        using var doc = JsonDocument.Parse(json);
+        var array = doc.RootElement;
+        array.GetArrayLength().Should().Be(1);
+
+        var root = array[0];
+        root.GetProperty("hash").GetString().Should().Be(hash);
+        root.GetProperty("source").GetString().Should().Be("subscription");
+    }
+
+    [Fact]
     public async Task GetTorrents_WhenQbUnavailable_Returns503()
     {
         // Arrange
@@ -791,6 +817,43 @@ public class MikanControllerTests : IDisposable
             Title = $"Title-{hash}",
             Status = status,
             Source = DownloadSource.Manual,
+            PublishedAt = DateTime.UtcNow,
+            DiscoveredAt = DateTime.UtcNow,
+            DownloadedAt = DateTime.UtcNow
+        });
+
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedSubscriptionDownloadAsync(string hash, DownloadStatus status)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AnimeDbContext>();
+
+        var subscription = await db.Subscriptions.FirstOrDefaultAsync(s => s.BangumiId == 10086);
+        if (subscription == null)
+        {
+            subscription = new SubscriptionEntity
+            {
+                BangumiId = 10086,
+                Title = "Subscription Download",
+                MikanBangumiId = "10086",
+                IsEnabled = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            db.Subscriptions.Add(subscription);
+            await db.SaveChangesAsync();
+        }
+
+        db.DownloadHistory.Add(new DownloadHistoryEntity
+        {
+            SubscriptionId = subscription.Id,
+            TorrentUrl = $"magnet:?xt=urn:btih:{hash}",
+            TorrentHash = hash,
+            Title = $"Title-{hash}",
+            Status = status,
+            Source = DownloadSource.Subscription,
             PublishedAt = DateTime.UtcNow,
             DiscoveredAt = DateTime.UtcNow,
             DownloadedAt = DateTime.UtcNow

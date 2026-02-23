@@ -6,6 +6,7 @@ using backend.Models.Dtos;
 using backend.Models.Jikan;
 using backend.Services.Interfaces;
 using backend.Services.Repositories;
+using backend.Services.Utilities;
 
 namespace backend.Services.Implementations;
 
@@ -23,6 +24,11 @@ public class AnimeAggregationService : IAnimeAggregationService
     private readonly IAnimeCacheService _cacheService;
     private readonly IResilienceService _resilienceService;
     private readonly ILogger<AnimeAggregationService> _logger;
+
+    private const string TopBangumiCacheSource = "top:bangumi";
+    private const string TopAniListCacheSource = "top:anilist";
+    private const string TopMalCacheSource = "top:mal";
+    private static readonly TimeSpan TopListCacheTtl = TimeSpan.FromHours(24);
 
     public AnimeAggregationService(
         IBangumiClient bangumiClient,
@@ -45,14 +51,10 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     public async Task<AnimeListResponse> GetTodayAnimeEnrichedAsync(
-        string? bangumiToken = null,
         string? tmdbToken = null,
         CancellationToken cancellationToken = default)
     {
-        // Bangumi public API doesn't require authentication
-        // Set tokens on clients (if provided)
-        if (!string.IsNullOrWhiteSpace(bangumiToken))
-            _bangumiClient.SetToken(bangumiToken);
+        // Set TMDB token (if provided)
         _tmdbClient.SetToken(tmdbToken);
 
         _logger.LogInformation("Starting anime aggregation for today's schedule");
@@ -121,7 +123,7 @@ public class AnimeAggregationService : IAnimeAggregationService
 
             // Step 3: No pre-fetched data, fall back to real-time API fetch
             _logger.LogWarning("No pre-fetched data for weekday {Weekday}, falling back to real-time fetch", todayWeekday);
-            return await FetchAllFromApiAsync(bangumiToken, tmdbToken, todayWeekday, cancellationToken);
+            return await FetchAllFromApiAsync(tmdbToken, todayWeekday, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -228,9 +230,6 @@ public class AnimeAggregationService : IAnimeAggregationService
                          ? large.GetString() ?? ""
                          : "";
 
-        bool containsJapanese = !string.IsNullOrEmpty(oriTitle) &&
-            System.Text.RegularExpressions.Regex.IsMatch(oriTitle, @"[\p{IsHiragana}\p{IsKatakana}]");
-
         // Fetch TMDB and AniList in parallel
         var tmdbTask = _tmdbClient.GetAnimeSummaryAndBackdropAsync(oriTitle, airDate);
         var anilistTask = _aniListClient.GetAnimeInfoAsync(oriTitle);
@@ -245,8 +244,15 @@ public class AnimeAggregationService : IAnimeAggregationService
         var anilistResult = anilistTask.IsCompletedSuccessfully ? await anilistTask : null;
 
         // Determine final values
-        var jpTitle = containsJapanese ? oriTitle : "";
         var enTitle = tmdbResult?.EnglishTitle ?? anilistResult?.EnglishTitle ?? "";
+        var resolvedTitles = TitleLanguageResolver.ResolveFromName(
+            oriTitle,
+            jpTitle: null,
+            chTitle: chTitle,
+            enTitle: enTitle);
+        var jpTitle = resolvedTitles.jpTitle;
+        chTitle = resolvedTitles.chTitle;
+        enTitle = resolvedTitles.enTitle;
 
         // Skip if no valid title
         if (string.IsNullOrEmpty(jpTitle) && string.IsNullOrEmpty(chTitle) && string.IsNullOrEmpty(enTitle))
@@ -305,7 +311,6 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     private async Task<AnimeListResponse> FetchAllFromApiAsync(
-        string? bangumiToken,
         string? tmdbToken,
         int weekday,
         CancellationToken cancellationToken)
@@ -405,16 +410,32 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     public async Task<AnimeListResponse> GetTopAnimeFromBangumiAsync(
-        string? bangumiToken = null,
         string? tmdbToken = null,
         int limit = 10,
         CancellationToken cancellationToken = default)
     {
-        // Set tokens for API clients
-        if (!string.IsNullOrWhiteSpace(bangumiToken))
-            _bangumiClient.SetToken(bangumiToken);
+        // Set TMDB token for enrichment
         _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} anime from Bangumi with enrichment", limit);
+
+        var (cachedTopBangumi, cachedTopBangumiUpdatedAt) = await TryReadTopListCacheAsync(
+            TopBangumiCacheSource,
+            allowStale: false);
+        if (cachedTopBangumi != null && cachedTopBangumi.Count > 0)
+        {
+            _logger.LogInformation("Returning Bangumi top list from persistent cache ({Count})", cachedTopBangumi.Count);
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Database,
+                IsStale = false,
+                Message = $"Top {cachedTopBangumi.Count} anime from Bangumi (cached)",
+                LastUpdated = cachedTopBangumiUpdatedAt,
+                Count = cachedTopBangumi.Count,
+                Animes = cachedTopBangumi,
+                RetryAttempts = 0
+            };
+        }
 
         try
         {
@@ -440,17 +461,29 @@ public class AnimeAggregationService : IAnimeAggregationService
 
                 cachedById.TryGetValue(id, out var cachedAnime);
 
-                var jpTitle = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
-                if (string.IsNullOrWhiteSpace(jpTitle))
-                {
-                    jpTitle = cachedAnime?.NameJapanese ?? "";
-                }
+                var nameTitle = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
 
                 var chTitle = subject.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
                 if (string.IsNullOrWhiteSpace(chTitle))
                 {
                     chTitle = cachedAnime?.NameChinese ?? "";
                 }
+
+                var enTitle = cachedAnime?.NameEnglish ?? "";
+                var resolvedTitles = TitleLanguageResolver.ResolveFromName(
+                    nameTitle,
+                    jpTitle: cachedAnime?.NameJapanese,
+                    chTitle: chTitle,
+                    enTitle: enTitle);
+                var jpTitle = resolvedTitles.jpTitle;
+                chTitle = resolvedTitles.chTitle;
+                enTitle = resolvedTitles.enTitle;
+
+                var titleForEnrichment = !string.IsNullOrWhiteSpace(nameTitle)
+                    ? nameTitle
+                    : (!string.IsNullOrWhiteSpace(jpTitle)
+                        ? jpTitle
+                        : (!string.IsNullOrWhiteSpace(chTitle) ? chTitle : enTitle));
 
                 var chDesc = subject.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
                 if (string.IsNullOrWhiteSpace(chDesc))
@@ -479,7 +512,6 @@ public class AnimeAggregationService : IAnimeAggregationService
                     portraitUrl = cachedAnime?.ImagePortrait ?? "";
                 }
 
-                var enTitle = cachedAnime?.NameEnglish ?? "";
                 var enDesc = cachedAnime?.DescEnglish ?? "";
                 var landscapeUrl = cachedAnime?.ImageLandscape ?? "";
                 var tmdbUrl = cachedAnime?.UrlTmdb ?? "";
@@ -490,7 +522,7 @@ public class AnimeAggregationService : IAnimeAggregationService
                     string.IsNullOrWhiteSpace(enDesc) ||
                     string.IsNullOrWhiteSpace(tmdbUrl))
                 {
-                    var tmdbResult = await EnrichWithTmdbAsync(jpTitle, airDate);
+                    var tmdbResult = await EnrichWithTmdbAsync(titleForEnrichment, airDate);
                     if (string.IsNullOrWhiteSpace(enTitle))
                     {
                         enTitle = tmdbResult.enTitle;
@@ -511,7 +543,7 @@ public class AnimeAggregationService : IAnimeAggregationService
 
                 if (string.IsNullOrEmpty(landscapeUrl))
                 {
-                    var anilistData = await EnrichWithAniListAsync(jpTitle);
+                    var anilistData = await EnrichWithAniListAsync(titleForEnrichment);
                     if (anilistData != null)
                     {
                         landscapeUrl = anilistData.BannerImage ?? "";
@@ -559,24 +591,56 @@ public class AnimeAggregationService : IAnimeAggregationService
                     urlAnilist: anilistUrl);
             }
 
+            await SaveTopListCacheAsync(TopBangumiCacheSource, animeDtos);
+
             _logger.LogInformation("Retrieved {Count} top anime from Bangumi (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
                 Message = $"Top {animeDtos.Count} anime from Bangumi (enriched)",
-                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
-                Animes = animeDtos, RetryAttempts = 0
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
             };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to fetch top anime from Bangumi");
+
+            var (fallbackTopBangumi, fallbackTopBangumiUpdatedAt) = await TryReadTopListCacheAsync(
+                TopBangumiCacheSource,
+                allowStale: true);
+            if (fallbackTopBangumi != null && fallbackTopBangumi.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Using stale Bangumi top cache fallback due to API failure. Cached count={Count}",
+                    fallbackTopBangumi.Count);
+                return new AnimeListResponse
+                {
+                    Success = true,
+                    DataSource = DataSource.CacheFallback,
+                    IsStale = true,
+                    Message = $"Failed to refresh Bangumi top anime, using cached snapshot: {ex.Message}",
+                    LastUpdated = fallbackTopBangumiUpdatedAt,
+                    Count = fallbackTopBangumi.Count,
+                    Animes = fallbackTopBangumi,
+                    RetryAttempts = 0
+                };
+            }
+
             return new AnimeListResponse
             {
-                Success = false, DataSource = DataSource.Api, IsStale = true,
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
                 Message = $"Failed to fetch Bangumi top anime: {ex.Message}",
-                LastUpdated = null, Count = 0,
-                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
             };
         }
     }
@@ -589,6 +653,25 @@ public class AnimeAggregationService : IAnimeAggregationService
         // Set TMDB token for backdrop enrichment
         _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} trending anime from AniList with enrichment", limit);
+
+        var (cachedTopAniList, cachedTopAniListUpdatedAt) = await TryReadTopListCacheAsync(
+            TopAniListCacheSource,
+            allowStale: false);
+        if (cachedTopAniList != null && cachedTopAniList.Count > 0)
+        {
+            _logger.LogInformation("Returning AniList top list from persistent cache ({Count})", cachedTopAniList.Count);
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Database,
+                IsStale = false,
+                Message = $"Top {cachedTopAniList.Count} trending anime from AniList (cached)",
+                LastUpdated = cachedTopAniListUpdatedAt,
+                Count = cachedTopAniList.Count,
+                Animes = cachedTopAniList,
+                RetryAttempts = 0
+            };
+        }
 
         try
         {
@@ -640,24 +723,56 @@ public class AnimeAggregationService : IAnimeAggregationService
                 });
             }
 
+            await SaveTopListCacheAsync(TopAniListCacheSource, animeDtos);
+
             _logger.LogInformation("Retrieved {Count} trending anime from AniList (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
                 Message = $"Top {animeDtos.Count} trending anime from AniList (enriched)",
-                LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
-                Animes = animeDtos, RetryAttempts = 0
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
             };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to fetch trending anime from AniList");
+
+            var (fallbackTopAniList, fallbackTopAniListUpdatedAt) = await TryReadTopListCacheAsync(
+                TopAniListCacheSource,
+                allowStale: true);
+            if (fallbackTopAniList != null && fallbackTopAniList.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Using stale AniList top cache fallback due to API failure. Cached count={Count}",
+                    fallbackTopAniList.Count);
+                return new AnimeListResponse
+                {
+                    Success = true,
+                    DataSource = DataSource.CacheFallback,
+                    IsStale = true,
+                    Message = $"Failed to refresh AniList trending anime, using cached snapshot: {ex.Message}",
+                    LastUpdated = fallbackTopAniListUpdatedAt,
+                    Count = fallbackTopAniList.Count,
+                    Animes = fallbackTopAniList,
+                    RetryAttempts = 0
+                };
+            }
+
             return new AnimeListResponse
             {
-                Success = false, DataSource = DataSource.Api, IsStale = true,
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
                 Message = $"Failed to fetch AniList trending anime: {ex.Message}",
-                LastUpdated = null, Count = 0,
-                Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
             };
         }
     }
@@ -670,6 +785,25 @@ public class AnimeAggregationService : IAnimeAggregationService
         // Set TMDB token for backdrop enrichment
         _tmdbClient.SetToken(tmdbToken);
         _logger.LogInformation("Fetching top {Limit} anime from MAL via Jikan with enrichment", limit);
+
+        var (cachedTopMal, cachedTopMalUpdatedAt) = await TryReadTopListCacheAsync(
+            TopMalCacheSource,
+            allowStale: false);
+        if (cachedTopMal != null && cachedTopMal.Count > 0)
+        {
+            _logger.LogInformation("Returning MAL top list from persistent cache ({Count})", cachedTopMal.Count);
+            return new AnimeListResponse
+            {
+                Success = true,
+                DataSource = DataSource.Database,
+                IsStale = false,
+                Message = $"Top {cachedTopMal.Count} anime from MyAnimeList (cached)",
+                LastUpdated = cachedTopMalUpdatedAt,
+                Count = cachedTopMal.Count,
+                Animes = cachedTopMal,
+                RetryAttempts = 0
+            };
+        }
 
         try
         {
@@ -816,22 +950,154 @@ public class AnimeAggregationService : IAnimeAggregationService
                 }
             }
 
+            await SaveTopListCacheAsync(TopMalCacheSource, animeDtos);
+
             _logger.LogInformation("Retrieved {Count} top anime from MAL (enriched)", animeDtos.Count);
             return new AnimeListResponse
             {
-                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Success = true,
+                DataSource = DataSource.Api,
+                IsStale = false,
                 Message = $"Top {animeDtos.Count} anime from MyAnimeList (enriched)",
+                LastUpdated = DateTime.UtcNow,
+                Count = animeDtos.Count,
+                Animes = animeDtos,
+                RetryAttempts = 0
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch top anime from MAL");
+
+            var (fallbackTopMal, fallbackTopMalUpdatedAt) = await TryReadTopListCacheAsync(
+                TopMalCacheSource,
+                allowStale: true);
+            if (fallbackTopMal != null && fallbackTopMal.Count > 0)
+            {
+                _logger.LogWarning(
+                    "Using stale MAL top cache fallback due to API failure. Cached count={Count}",
+                    fallbackTopMal.Count);
+                return new AnimeListResponse
+                {
+                    Success = true,
+                    DataSource = DataSource.CacheFallback,
+                    IsStale = true,
+                    Message = $"Failed to refresh MAL top anime, using cached snapshot: {ex.Message}",
+                    LastUpdated = fallbackTopMalUpdatedAt,
+                    Count = fallbackTopMal.Count,
+                    Animes = fallbackTopMal,
+                    RetryAttempts = 0
+                };
+            }
+
+            return new AnimeListResponse
+            {
+                Success = false,
+                DataSource = DataSource.Api,
+                IsStale = true,
+                Message = $"Failed to fetch MAL top anime: {ex.Message}",
+                LastUpdated = null,
+                Count = 0,
+                Animes = new List<AnimeInfoDto>(),
+                RetryAttempts = 0
+            };
+        }
+    }
+
+    public async Task<AnimeListResponse> SearchAnimeAsync(
+        string query,
+        string? bangumiToken = null,
+        string? tmdbToken = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(bangumiToken))
+            _bangumiClient.SetToken(bangumiToken);
+        _tmdbClient.SetToken(tmdbToken);
+        _logger.LogInformation("Searching anime for query: {Query}", query);
+
+        try
+        {
+            var subjectList = await _bangumiClient.SearchSubjectListAsync(query);
+            var animeDtos = new List<AnimeInfoDto>();
+
+            if (subjectList.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var subject in subjectList.EnumerateArray())
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+
+                    var id = subject.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+                    if (id == 0) continue;
+
+                    var jpTitle = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                    var chTitle = subject.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+                    var chDesc = subject.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
+                    var airDate = subject.TryGetProperty("date", out var dateEl) ? dateEl.GetString() : null;
+
+                    var score = "0";
+                    if (subject.TryGetProperty("rating", out var rating) &&
+                        rating.TryGetProperty("score", out var scoreEl))
+                    {
+                        score = scoreEl.GetDouble().ToString("F1");
+                    }
+
+                    var portraitUrl = subject.TryGetProperty("images", out var images) &&
+                                      images.TryGetProperty("large", out var large)
+                                      ? large.GetString() ?? "" : "";
+
+                    // Enrich with TMDB (landscape + English data)
+                    var (enTitle, enDesc, landscapeUrl, tmdbUrl) = await EnrichWithTmdbAsync(jpTitle, airDate);
+
+                    // If TMDB didn't return landscape, try AniList
+                    var anilistUrl = "";
+                    if (string.IsNullOrEmpty(landscapeUrl))
+                    {
+                        var anilistData = await EnrichWithAniListAsync(jpTitle);
+                        if (anilistData != null)
+                        {
+                            landscapeUrl = anilistData.BannerImage ?? "";
+                            anilistUrl = anilistData.OriSiteUrl ?? "";
+                            if (string.IsNullOrEmpty(enTitle)) enTitle = anilistData.EnglishTitle ?? "";
+                            if (string.IsNullOrEmpty(enDesc)) enDesc = StripHtmlTags(anilistData.EnglishSummary ?? "");
+                        }
+                    }
+
+                    animeDtos.Add(new AnimeInfoDto
+                    {
+                        BangumiId = id.ToString(),
+                        JpTitle = jpTitle,
+                        ChTitle = chTitle,
+                        EnTitle = enTitle,
+                        ChDesc = string.IsNullOrEmpty(chDesc) ? "无可用中文介绍" : chDesc,
+                        EnDesc = string.IsNullOrEmpty(enDesc) ? "No English description available" : enDesc,
+                        Score = score,
+                        Images = new AnimeImagesDto { Portrait = portraitUrl, Landscape = landscapeUrl },
+                        ExternalUrls = new ExternalUrlsDto
+                        {
+                            Bangumi = $"https://bgm.tv/subject/{id}",
+                            Tmdb = tmdbUrl,
+                            Anilist = anilistUrl
+                        }
+                    });
+                }
+            }
+
+            _logger.LogInformation("Search for '{Query}' returned {Count} results (enriched)", query, animeDtos.Count);
+            return new AnimeListResponse
+            {
+                Success = true, DataSource = DataSource.Api, IsStale = false,
+                Message = $"Search results for '{query}' ({animeDtos.Count} found)",
                 LastUpdated = DateTime.UtcNow, Count = animeDtos.Count,
                 Animes = animeDtos, RetryAttempts = 0
             };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to fetch top anime from MAL");
+            _logger.LogError(ex, "Failed to search anime for query: {Query}", query);
             return new AnimeListResponse
             {
                 Success = false, DataSource = DataSource.Api, IsStale = true,
-                Message = $"Failed to fetch MAL top anime: {ex.Message}",
+                Message = $"Search failed: {ex.Message}",
                 LastUpdated = null, Count = 0,
                 Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
             };
@@ -940,7 +1206,9 @@ public class AnimeAggregationService : IAnimeAggregationService
             if (result.ValueKind == JsonValueKind.Undefined) return ("", "", "", "");
 
             var id = result.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+            var name = result.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
             var chTitle = result.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+            chTitle = TitleLanguageResolver.ResolveFromName(name, chTitle: chTitle).chTitle;
             var chDesc = result.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
 
             // If no summary in search result, fetch detail
@@ -1006,6 +1274,49 @@ public class AnimeAggregationService : IAnimeAggregationService
         };
 
         await _repository.SaveAnimeInfoAsync(candidate);
+    }
+
+    private async Task<(List<AnimeInfoDto>? animes, DateTime? updatedAt)> TryReadTopListCacheAsync(
+        string source,
+        bool allowStale)
+    {
+        var cache = await _repository.GetTopAnimeCacheAsync(source);
+        if (cache == null || string.IsNullOrWhiteSpace(cache.PayloadJson))
+        {
+            return (null, null);
+        }
+
+        var isStale = DateTime.UtcNow - cache.UpdatedAt > TopListCacheTtl;
+        if (isStale && !allowStale)
+        {
+            return (null, cache.UpdatedAt);
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Deserialize<List<AnimeInfoDto>>(cache.PayloadJson);
+            if (payload == null || payload.Count == 0)
+            {
+                return (null, cache.UpdatedAt);
+            }
+
+            return (payload, cache.UpdatedAt);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to deserialize top anime cache payload for source {Source}", source);
+            return (null, cache.UpdatedAt);
+        }
+    }
+
+    private async Task SaveTopListCacheAsync(string source, List<AnimeInfoDto> animes)
+    {
+        var payloadJson = JsonSerializer.Serialize(animes);
+        await _repository.SaveTopAnimeCacheAsync(new TopAnimeCacheEntity
+        {
+            Source = source,
+            PayloadJson = payloadJson
+        });
     }
 
     private static string? NullIfWhiteSpace(string? value)

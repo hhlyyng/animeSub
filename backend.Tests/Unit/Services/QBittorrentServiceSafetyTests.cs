@@ -698,6 +698,13 @@ public class QBittorrentServiceSafetyTests
         return new backend.Services.Implementations.QBittorrentService(
             httpClient,
             _loggerMock.Object,
-            Options.Create(config));
+            new StaticOptionsMonitor<QBittorrentConfiguration>(config));
+    }
+
+    private sealed class StaticOptionsMonitor<T>(T value) : IOptionsMonitor<T>
+    {
+        public T CurrentValue => value;
+        public T Get(string? name) => value;
+        public IDisposable? OnChange(Action<T, string?> listener) => null;
     }
 }

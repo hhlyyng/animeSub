@@ -21,7 +21,7 @@ public class TokenStorageServiceTests
                 tempRoot,
                 new Dictionary<string, string?>
                 {
-                    ["PreFetch:TmdbToken"] = "tmdb_fallback_token"
+                    ["ApiTokens:TmdbToken"] = "tmdb_fallback_token"
                 });
 
             // Act
@@ -47,10 +47,10 @@ public class TokenStorageServiceTests
                 tempRoot,
                 new Dictionary<string, string?>
                 {
-                    ["PreFetch:TmdbToken"] = "tmdb_fallback_token"
+                    ["ApiTokens:TmdbToken"] = "tmdb_fallback_token"
                 });
 
-            await sut.SaveTokensAsync(null, "tmdb_stored_token");
+            await sut.SaveTmdbTokenAsync("tmdb_stored_token");
 
             // Act
             var token = await sut.GetTmdbTokenAsync();
@@ -73,7 +73,7 @@ public class TokenStorageServiceTests
         {
             var sut = CreateService(tempRoot, new Dictionary<string, string?>());
 
-            await sut.SaveTokensAsync(null, "tmdb_stored_token");
+            await sut.SaveTmdbTokenAsync("tmdb_stored_token");
 
             // Act
             var token = await sut.GetTmdbTokenAsync();

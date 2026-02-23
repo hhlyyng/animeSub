@@ -84,6 +84,21 @@ public class DownloadHistoryEntity
     public DownloadSource Source { get; set; } = DownloadSource.Manual;
 
     /// <summary>
+    /// Related anime Bangumi ID for UI-level grouping (especially manual downloads)
+    /// </summary>
+    public int? AnimeBangumiId { get; set; }
+
+    /// <summary>
+    /// Related anime Mikan Bangumi ID for UI-level linking
+    /// </summary>
+    public string? AnimeMikanBangumiId { get; set; }
+
+    /// <summary>
+    /// Related anime display title for UI fallback
+    /// </summary>
+    public string? AnimeTitle { get; set; }
+
+    /// <summary>
     /// Current download progress (0-100)
     /// </summary>
     public double Progress { get; set; } = 0;

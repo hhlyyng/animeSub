@@ -32,9 +32,27 @@ public interface IMikanClient
     Task<MikanSearchResult?> SearchAnimeAsync(string title);
 
     /// <summary>
+    /// Search for anime entries on Mikan (returns all matching entries with images)
+    /// </summary>
+    /// <param name="title">Anime title to search for</param>
+    /// <returns>List of matching anime entries</returns>
+    Task<List<MikanAnimeEntry>> SearchAnimeEntriesAsync(string title);
+
+    /// <summary>
     /// Get parsed RSS feed with metadata
     /// </summary>
     /// <param name="mikanBangumiId">Mikan anime ID</param>
     /// <returns>Feed response with parsed items and available filters</returns>
     Task<MikanFeedResponse> GetParsedFeedAsync(string mikanBangumiId);
+
+    /// <summary>
+    /// Scrape the Mikan Bangumi page to get subgroup name→ID mapping
+    /// </summary>
+    /// <param name="mikanBangumiId">Mikan anime ID</param>
+    /// <returns>List of subgroups with their numeric IDs</returns>
+    /// <summary>
+    /// Scrape subgroup mapping from Mikan Bangumi page.
+    /// Returns null on scrape failure (keeps existing cache), empty list when page has no subgroups.
+    /// </summary>
+    Task<List<MikanSubgroupInfo>?> GetSubgroupsAsync(string mikanBangumiId);
 }

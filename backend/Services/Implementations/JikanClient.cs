@@ -44,6 +44,25 @@ public class JikanClient : ApiClientBase<JikanClient>, IJikanClient
             return result.Data;
         }, "GetTopAnime");
 
+    public Task<List<JikanAnimeInfo>> GetTopAnimePageAsync(int page, int limit = 25) =>
+        ExecuteAsync(async () =>
+        {
+            var response = await HttpClient.GetAsync($"top/anime?page={page}&limit={limit}");
+            response.EnsureSuccessStatusCode();
+
+            var content = await response.Content.ReadAsStringAsync();
+            var result = JsonSerializer.Deserialize<JikanTopAnimeResponse>(content);
+
+            if (result?.Data == null)
+            {
+                Logger.LogWarning("Jikan API returned null data for page {Page}", page);
+                return new List<JikanAnimeInfo>();
+            }
+
+            Logger.LogInformation("Retrieved {Count} anime from Jikan page {Page}", result.Data.Count, page);
+            return result.Data;
+        }, $"GetTopAnimePage({page})");
+
     public async Task<JsonElement?> GetAnimeDetailAsync(int malId)
     {
         if (malId <= 0)

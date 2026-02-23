@@ -89,6 +89,7 @@ public class RequestResponseLoggingMiddleware
             if (_environment.IsDevelopment() &&
                 (request.Method == "POST" || request.Method == "PUT") &&
                 request.ContentLength > 0 &&
+                !IsSensitiveBodyPath(request.Path) &&
                 request.ContentLength < 10000) // Max 10KB
             {
                 request.EnableBuffering();
@@ -136,6 +137,7 @@ public class RequestResponseLoggingMiddleware
             // Log response body (only in development and for small responses)
             if (_environment.IsDevelopment() &&
                 response.ContentLength < 10000 &&
+                !IsSensitiveBodyPath(context.Request.Path) &&
                 response.Body.CanSeek)
             {
                 response.Body.Seek(0, SeekOrigin.Begin);
@@ -190,7 +192,6 @@ public class RequestResponseLoggingMiddleware
         var sensitiveHeaders = new[]
         {
             "Authorization",
-            "X-Bangumi-Token",
             "X-TMDB-Token",
             "Cookie",
             "Set-Cookie",
@@ -198,6 +199,11 @@ public class RequestResponseLoggingMiddleware
         };
 
         return sensitiveHeaders.Contains(headerName, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsSensitiveBodyPath(PathString requestPath)
+    {
+        return requestPath.StartsWithSegments("/api/settings", StringComparison.OrdinalIgnoreCase);
     }
 }
 
