@@ -196,5 +196,41 @@ namespace backend.Services.Implementations
                 return default;
             }
         }
+
+        public async Task<JsonElement> SearchSubjectListAsync(string title)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(title))
+                    return default;
+
+                var encodedTitle = Uri.EscapeDataString(title);
+                var response = await HttpClient.GetAsync($"search/subject/{encodedTitle}?type=2&responseGroup=small");
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Logger.LogWarning("Bangumi search list failed for title: {Title}, status: {Status}",
+                        title, response.StatusCode);
+                    return default;
+                }
+
+                var content = await response.Content.ReadAsStringAsync();
+                var result = JsonDocument.Parse(content).RootElement;
+
+                if (result.TryGetProperty("list", out var list))
+                {
+                    Logger.LogInformation("Found {Count} Bangumi results for '{Title}'",
+                        list.GetArrayLength(), title);
+                    return list;
+                }
+
+                return default;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "SearchSubjectList failed for: {Title}", title);
+                return default;
+            }
+        }
     }
 }

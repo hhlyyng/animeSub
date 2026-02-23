@@ -156,6 +156,33 @@ public class AnimeController : ControllerBase
     }
 
     /// <summary>
+    /// Search anime by title keyword
+    /// </summary>
+    [HttpGet("search")]
+    [ProducesResponseType(typeof(ApiResponseDto<AnimeListDataDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SearchAnime([FromQuery] string q, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(q))
+            return BadRequest(new { success = false, message = "Query parameter 'q' is required" });
+
+        _logger.LogInformation("Received search request for: {Query}", q);
+
+        var bangumiToken = await _tokenStorage.GetBangumiTokenAsync()
+            ?? Request.Headers["X-Bangumi-Token"].FirstOrDefault();
+        var tmdbToken = await _tokenStorage.GetTmdbTokenAsync()
+            ?? Request.Headers["X-TMDB-Token"].FirstOrDefault();
+
+        var response = await _aggregationService.SearchAnimeAsync(q, bangumiToken, tmdbToken, cancellationToken);
+
+        return Ok(new
+        {
+            success = response.Success,
+            data = new { count = response.Count, animes = response.Animes },
+            message = response.Message
+        });
+    }
+
+    /// <summary>
     /// Get top 10 anime from MyAnimeList (via Jikan API)
     /// </summary>
     /// <remarks>

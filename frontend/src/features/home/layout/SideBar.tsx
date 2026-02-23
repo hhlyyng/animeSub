@@ -7,11 +7,12 @@ import { useNavigate } from "react-router-dom";
 import HomeIcon from "../../../components/icons/HomeIcon";
 import SettingIcon from "../../../components/icons/SettingIcon";
 import DownloadIcon from "../../../components/icons/DownloadIcon";
+import SearchIcon from "../../../components/icons/SearchIcon";
 import { DefaultSideBar, CollapseSideBarArrow, ExpandSideBarArrow } from "../../../components/icons/SidebarIcon";
 import GithubIcon from "../../../components/icons/GithubIcon";
 import LanguageToggleIcon from "../../../components/icons/LanguageToggleIcon";
 
-type PageType = 'home' | 'setting' | 'download';
+type PageType = 'home' | 'setting' | 'download' | 'search';
 
 interface SideBarProps {
   language: "en" | "zh";
@@ -28,6 +29,7 @@ const SideBar: React.FC<SideBarProps> = ({ language, currentPage, onLanguageChan
   const text: {
     [key: string]: {
       home: string;
+      search: string;
       settings: string;
       download: string;
       github: string;
@@ -37,6 +39,7 @@ const SideBar: React.FC<SideBarProps> = ({ language, currentPage, onLanguageChan
   } = {
     zh: {
       home: "主页",
+      search: "搜索",
       settings: "设置",
       download: "下载",
       github: "项目地址",
@@ -45,6 +48,7 @@ const SideBar: React.FC<SideBarProps> = ({ language, currentPage, onLanguageChan
     },
     en: {
       home: "Homepage",
+      search: "Search",
       settings: "Setting",
       download: "Download",
       github: "GitHub",
@@ -84,6 +88,9 @@ const SideBar: React.FC<SideBarProps> = ({ language, currentPage, onLanguageChan
         break;
       case 'setting':
         navigate('/setting');
+        break;
+      case 'search':
+        navigate('/search');
         break;
     }
   };
@@ -128,6 +135,17 @@ const SideBar: React.FC<SideBarProps> = ({ language, currentPage, onLanguageChan
           onClick={() => navigateToPage('home')}
           showtext={showText}
           active={currentPage === 'home'}
+          language={language}
+        />
+
+        <SidebarButton
+          icon={<SearchIcon />}
+          label={currentLanguage.search}
+          variant="action"
+          collapsed={isCollapsed}
+          onClick={() => navigateToPage('search')}
+          showtext={showText}
+          active={currentPage === 'search'}
           language={language}
         />
 

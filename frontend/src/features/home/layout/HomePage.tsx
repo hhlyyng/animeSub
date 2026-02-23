@@ -3,6 +3,7 @@ import SideBar from "./SideBar";
 import DownloadPage from "../components/DownloadPage";
 import HomeContent from "../components/HomePageContent";
 import Setting from "../components/SettingPage";
+import SearchPage from "../components/SearchPage";
 import { useAppStore } from "../../../stores/useAppStores";
 
 // Route Content
@@ -13,7 +14,7 @@ const AppContent = () => {
   const isModalOpen = useAppStore((state) => state.isModalOpen);
 
   // 从路径映射到页面类型
-  const getCurrentPageType = (): 'home' | 'setting' | 'download' => {
+  const getCurrentPageType = (): 'home' | 'setting' | 'download' | 'search' => {
     switch (location.pathname) {
       case '/':
       case '/home':
@@ -23,6 +24,8 @@ const AppContent = () => {
       case '/setting':
       case '/settings':
         return 'setting';
+      case '/search':
+        return 'search';
       default:
         return 'home';
     }
@@ -45,6 +48,7 @@ const AppContent = () => {
           <Route path="/download" element={<DownloadPage />} />
           <Route path="/setting" element={<Setting />} />
           <Route path="/settings" element={<Setting />} />
+          <Route path="/search" element={<SearchPage />} />
           {/* 404 Redirect to Homepage */}
           <Route path="*" element={<HomeContent />} />
         </Routes>

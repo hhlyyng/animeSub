@@ -61,6 +61,13 @@ public interface IBangumiClient
     Task<JsonElement> SearchByTitleAsync(string title);
 
     /// <summary>
+    /// Search anime by title and return all matching subjects as a list
+    /// </summary>
+    /// <param name="title">Title to search for</param>
+    /// <returns>JsonElement array of matching subjects, or empty array if not found</returns>
+    Task<JsonElement> SearchSubjectListAsync(string title);
+
+    /// <summary>
     /// Set the API authentication token
     /// </summary>
     void SetToken(string token);
