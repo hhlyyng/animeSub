@@ -896,6 +896,7 @@ export default function SettingPage() {
             </button>
         </div>
 
+
         {randomFeedEnabled && (
           <div className="mt-3 border-t border-gray-100 pt-3">
             <div className="grid grid-cols-[300px_1fr] items-start gap-3">

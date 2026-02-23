@@ -79,3 +79,9 @@ backend/Data/uploads/
 
 # Local audit notes
 audit_log/
+
+# =====================
+# Local Dev Tools & Data
+# =====================
+/tools/
+/data/
