@@ -3,6 +3,7 @@ using backend.Data.Entities;
 using backend.Models.Dtos;
 using backend.Services.Interfaces;
 using backend.Services.Repositories;
+using backend.Services.Utilities;
 
 namespace backend.Services.Implementations;
 
@@ -195,7 +196,7 @@ public class AnimePoolBuilderService : BackgroundService
                 if (ct.IsCancellationRequested) break;
 
                 var item = rawItems[i];
-                var dto = await EnrichWithTmdbAsync(tmdbClient, item);
+                var dto = await EnrichAsync(tmdbClient, bangumiClient, item);
                 animeDtos.Add(dto);
 
                 // Incremental save every 50 items
@@ -332,8 +333,9 @@ public class AnimePoolBuilderService : BackgroundService
         }
     }
 
-    private static async Task<AnimeInfoDto> EnrichWithTmdbAsync(
+    private static async Task<AnimeInfoDto> EnrichAsync(
         ITMDBClient tmdbClient,
+        IBangumiClient bangumiClient,
         RawPoolItem item)
     {
         string landscapeUrl = "";
@@ -363,6 +365,28 @@ public class AnimePoolBuilderService : BackgroundService
             catch
             {
                 // Continue without TMDB enrichment
+            }
+        }
+
+        // Bangumi fallback: get Chinese title/desc when TMDB has no Chinese data
+        if (string.IsNullOrWhiteSpace(chTitle))
+        {
+            var bSearchTitle = item.NativeTitle ?? item.SearchTitle;
+            if (!string.IsNullOrWhiteSpace(bSearchTitle))
+            {
+                try
+                {
+                    var bResult = await bangumiClient.SearchByTitleAsync(bSearchTitle);
+                    if (bResult.ValueKind != System.Text.Json.JsonValueKind.Undefined)
+                    {
+                        var bName = bResult.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                        var rawCh = bResult.TryGetProperty("name_cn", out var cn) ? cn.GetString() ?? "" : "";
+                        chTitle = TitleLanguageResolver.ResolveFromName(bName, chTitle: rawCh).chTitle;
+                        if (string.IsNullOrWhiteSpace(chDesc))
+                            chDesc = bResult.TryGetProperty("summary", out var s) ? s.GetString() ?? "" : "";
+                    }
+                }
+                catch { /* ignore, best-effort */ }
             }
         }
 
