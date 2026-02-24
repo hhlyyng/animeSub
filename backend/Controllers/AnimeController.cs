@@ -227,7 +227,10 @@ public class AnimeController : ControllerBase
     {
         count = Math.Clamp(count, 1, 20);
 
-        if (_animePoolService.PoolSize == 0)
+        // Always call GetRandomPicksAsync — it has a SQLite L2 fallback and will warm the
+        // memory cache on first hit after a restart, even before the builder runs.
+        var picks = await _animePoolService.GetRandomPicksAsync(count, cancellationToken);
+        if (picks.Count == 0)
         {
             return StatusCode(202, new
             {
@@ -237,7 +240,6 @@ public class AnimeController : ControllerBase
             });
         }
 
-        var picks = await _animePoolService.GetRandomPicksAsync(count, cancellationToken);
         return Ok(new
         {
             success = true,

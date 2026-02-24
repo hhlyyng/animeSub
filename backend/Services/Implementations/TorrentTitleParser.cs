@@ -43,7 +43,9 @@ public partial class TorrentTitleParser : ITorrentTitleParser
     private static partial Regex CollectionRegex();
 
     // Bug 5 (new): range episodes like 01-12, 841-847; also Part 1+2 style batch releases
-    [GeneratedRegex(@"\d{1,4}\s*[-~\uff5e+\uff0b]\s*\d{1,4}", RegexOptions.Compiled)]
+    // Bug 7: negative lookbehind (?<![A-Za-z]) prevents matching letter-prefixed numbers like
+    //   S2 - 23 (season marker), AACx2, etc. from being misidentified as batch ranges.
+    [GeneratedRegex(@"(?<![A-Za-z])\d{1,4}\s*[-~\uff5e+\uff0b]\s*\d{1,4}", RegexOptions.Compiled)]
     private static partial Regex CollectionRangeRegex();
 
     // Bug 4: added 简繁日 / 簡繁日 / 简/繁 / 繁/简 patterns

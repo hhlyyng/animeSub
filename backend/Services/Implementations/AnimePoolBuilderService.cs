@@ -1,3 +1,4 @@
+using System.Text.Json;
 using backend.Data.Entities;
 using backend.Models.Dtos;
 using backend.Services.Interfaces;
@@ -78,7 +79,31 @@ public class AnimePoolBuilderService : BackgroundService
         if (entity == null)
             return true;
 
-        return DateTime.UtcNow - entity.UpdatedAt > RebuildInterval;
+        bool isStale = DateTime.UtcNow - entity.UpdatedAt > RebuildInterval;
+
+        if (!isStale && !string.IsNullOrWhiteSpace(entity.PayloadJson))
+        {
+            // Fresh pool exists in SQLite — warm the memory cache so PoolSize > 0
+            // and any concurrent requests resolve immediately without hitting SQLite again.
+            try
+            {
+                var pool = JsonSerializer.Deserialize<List<AnimeInfoDto>>(entity.PayloadJson);
+                if (pool != null && pool.Count > 0)
+                {
+                    _poolService.UpdateMemoryCache(pool);
+                    _logger.LogInformation(
+                        "Warmed random pool from SQLite at startup ({Count} items, age {Age:F1}h)",
+                        pool.Count,
+                        (DateTime.UtcNow - entity.UpdatedAt).TotalHours);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to warm random pool from SQLite cache");
+            }
+        }
+
+        return isStale;
     }
 
     private async Task BuildPoolAsync(CancellationToken ct)
