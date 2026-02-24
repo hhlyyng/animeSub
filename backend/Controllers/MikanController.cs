@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using HtmlAgilityPack;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -30,6 +31,7 @@ public class MikanController : ControllerBase
     private readonly IQBittorrentService _qbittorrentService;
     private readonly ILogger<MikanController> _logger;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IHttpClientFactory _httpClientFactory;
     private const string ManualSubscriptionTitle = "__manual_download_tracking__";
     private const string ManualSubscriptionMikanId = "manual";
     private const int ManualSubscriptionBangumiId = -1;
@@ -41,7 +43,8 @@ public class MikanController : ControllerBase
         IJikanClient jikanClient,
         IQBittorrentService qbittorrentService,
         ILogger<MikanController> logger,
-        IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider,
+        IHttpClientFactory httpClientFactory)
     {
         _mikanClient = mikanClient;
         _bangumiClient = bangumiClient;
@@ -50,6 +53,7 @@ public class MikanController : ControllerBase
         _qbittorrentService = qbittorrentService;
         _logger = logger;
         _serviceProvider = serviceProvider;
+        _httpClientFactory = httpClientFactory;
     }
 
     /// <summary>
@@ -255,13 +259,34 @@ public class MikanController : ControllerBase
             var normalized = false;
             if (parsedBangumiId.HasValue)
             {
-                normalized = await TryApplyBangumiEpisodeMapNormalizationAsync(
-                    feed,
-                    parsedBangumiId.Value,
-                    expectedEpisodes);
+                // Method 0: scrape bgm.tv prg_list for the season's starting episode offset
+                var prgListInfo = await TryGetBangumiPrgListInfoAsync(parsedBangumiId.Value);
+                if (prgListInfo.HasValue)
+                {
+                    normalized = ApplyExplicitOffsetNormalization(
+                        feed,
+                        prgListInfo.Value.offset,
+                        prgListInfo.Value.totalEpisodes ?? expectedEpisodes);
+                    if (normalized)
+                    {
+                        _logger.LogInformation(
+                            "Normalized via prg_list: BangumiId={Id} offset={Offset}",
+                            parsedBangumiId.Value, prgListInfo.Value.offset);
+                    }
+                }
 
                 if (!normalized)
                 {
+                    // Method 1: Bangumi API episode map (sort vs ep)
+                    normalized = await TryApplyBangumiEpisodeMapNormalizationAsync(
+                        feed,
+                        parsedBangumiId.Value,
+                        expectedEpisodes);
+                }
+
+                if (!normalized)
+                {
+                    // Method 2: Bangumi prequel relation chain
                     var bangumiOffset = await TryResolveOffsetFromBangumiRelationsAsync(parsedBangumiId.Value);
                     if (bangumiOffset.HasValue)
                     {
@@ -1664,6 +1689,70 @@ public class MikanController : ControllerBase
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Scrapes https://bgm.tv/subject/{bangumiId} and extracts from ul.prg_list:
+    ///   - The first li's episode number → offset = number - 1
+    ///   - The span.tip number → totalEpisodes (optional)
+    /// Returns null on failure (silently degrades to next method).
+    /// </summary>
+    private async Task<(int offset, int? totalEpisodes)?> TryGetBangumiPrgListInfoAsync(int bangumiId)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient();
+            var html = await client.GetStringAsync($"https://bgm.tv/subject/{bangumiId}");
+
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+
+            // Find the first li under ul.prg_list
+            var firstLi = doc.DocumentNode
+                .SelectSingleNode("//ul[contains(@class,'prg_list')]/li[1]");
+            if (firstLi == null)
+            {
+                return null;
+            }
+
+            var firstEpText = firstLi.InnerText;
+            var firstEpMatch = Regex.Match(firstEpText, @"\b(\d+)\b");
+            if (!firstEpMatch.Success || !int.TryParse(firstEpMatch.Groups[1].Value, out var firstEp))
+            {
+                return null;
+            }
+
+            var offset = firstEp - 1;
+            if (offset <= 0)
+            {
+                // Season starts at ep1, no offset needed
+                return null;
+            }
+
+            // Optionally extract total episode count from span.tip
+            int? totalEpisodes = null;
+            var tipSpan = doc.DocumentNode
+                .SelectSingleNode("//ul[contains(@class,'prg_list')]//span[contains(@class,'tip')]");
+            if (tipSpan != null)
+            {
+                var tipMatch = Regex.Match(tipSpan.InnerText, @"\b(\d+)\b");
+                if (tipMatch.Success && int.TryParse(tipMatch.Groups[1].Value, out var total) && total > 0)
+                {
+                    totalEpisodes = total;
+                }
+            }
+
+            _logger.LogInformation(
+                "PrgList: BangumiId={Id} firstEp={First} offset={Offset} totalEpisodes={Total}",
+                bangumiId, firstEp, offset, totalEpisodes);
+
+            return (offset, totalEpisodes);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "TryGetBangumiPrgListInfoAsync failed for BangumiId {Id}", bangumiId);
+            return null;
+        }
     }
 
     private sealed record EpisodeNormalizationEntry(
