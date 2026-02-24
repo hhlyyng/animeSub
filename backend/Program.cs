@@ -16,8 +16,22 @@ using backend.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Determine data directory (Docker: set DATA_DIR env var, e.g. /app/data)
+var envDataDir = builder.Configuration["DATA_DIR"];
+var dataDirectory = string.IsNullOrWhiteSpace(envDataDir)
+    ? Path.Combine(builder.Environment.ContentRootPath, "Data")
+    : envDataDir;
+Directory.CreateDirectory(dataDirectory);
+
+// Expose resolved data dir to services (e.g. SettingsController writes runtime config here)
+builder.Configuration["DataDir"] = dataDirectory;
+
 // Runtime overrides edited from settings page
-builder.Configuration.AddJsonFile("appsettings.runtime.json", optional: true, reloadOnChange: true);
+// In Docker: reads from DATA_DIR/appsettings.runtime.json; locally: from ContentRoot/appsettings.runtime.json
+var runtimeConfigPath = string.IsNullOrWhiteSpace(envDataDir)
+    ? "appsettings.runtime.json"
+    : Path.Combine(envDataDir, "appsettings.runtime.json");
+builder.Configuration.AddJsonFile(runtimeConfigPath, optional: true, reloadOnChange: true);
 
 // Configure Serilog with enhanced settings
 Log.Logger = new LoggerConfiguration()
@@ -58,16 +72,14 @@ builder.Services.Configure<PreFetchConfig>(
 builder.Services.AddControllers();
 
 // Configure SQLite database for anime caching
-var dataDirectory = Path.Combine(builder.Environment.ContentRootPath, "Data");
-Directory.CreateDirectory(dataDirectory);  // Ensure directory exists
-
 builder.Services.AddDbContext<AnimeDbContext>(options =>
     options.UseSqlite($"Data Source={Path.Combine(dataDirectory, "anime.db")}"));
 
 // Configure Data Protection for encrypted token storage
+var keysDirectory = Path.Combine(dataDirectory, ".keys");
+Directory.CreateDirectory(keysDirectory);
 builder.Services.AddDataProtection()
-    .PersistKeysToFileSystem(new DirectoryInfo(
-        Path.Combine(builder.Environment.ContentRootPath, ".keys")))
+    .PersistKeysToFileSystem(new DirectoryInfo(keysDirectory))
     .SetApplicationName("AnimeSubscription");
 
 // Register HttpClient factories - using factory delegates to avoid casting issues
@@ -229,14 +241,18 @@ builder.Services.AddResponseCompression(options =>
     options.EnableForHttps = true;
 });
 
-// Add CORS (allow frontend)
+// Add CORS (allow frontend) - configure via CORS_ORIGINS env var (comma-separated, or * for any)
+var corsOriginsRaw = builder.Configuration["CORS_ORIGINS"] ?? "http://localhost:5173,http://localhost:3000";
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
-              .AllowAnyHeader()
-              .AllowAnyMethod();
+        if (corsOriginsRaw.Trim() == "*")
+            policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
+        else
+            policy.WithOrigins(corsOriginsRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                  .AllowAnyHeader()
+                  .AllowAnyMethod();
     });
 });
 

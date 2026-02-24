@@ -638,7 +638,8 @@ public class SettingsController : ControllerBase
 
     private async Task SaveRuntimeSettingsAsync(Action<JsonObject> mutate, CancellationToken cancellationToken = default)
     {
-        var filePath = Path.Combine(_environment.ContentRootPath, RuntimeSettingsFileName);
+        var dataDir = _configuration["DataDir"] ?? _environment.ContentRootPath;
+        var filePath = Path.Combine(dataDir, RuntimeSettingsFileName);
 
         await RuntimeSettingsFileLock.WaitAsync(cancellationToken);
         try
