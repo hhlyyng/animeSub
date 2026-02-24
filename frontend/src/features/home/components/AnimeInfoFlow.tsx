@@ -9,6 +9,7 @@ type AnimeFlowProps = {
   topic: string;
   items: AnimeInfo[];
   onRefresh?: () => void;
+  disableExpand?: boolean;
 };
 
 // 卡片展开时的宽度变化：534px - 200px = 334px
@@ -22,7 +23,7 @@ const NAV_BUTTON_SIZE = 48;
 const TITLE_BASE_OFFSET = NAV_BUTTON_SIZE + FLOW_GAP;
 const ANIMATION_DURATION = 300;
 
-export function AnimeFlow({ topic, items, onRefresh }: AnimeFlowProps) {
+export function AnimeFlow({ topic, items, onRefresh, disableExpand = false }: AnimeFlowProps) {
   const [windowSize, setWindowSize] = useState(7); //default window size: 7
   const step = Math.max(1, windowSize - 1);
   const [startIndex, setStartIndex] = useState(0);
@@ -113,7 +114,11 @@ export function AnimeFlow({ topic, items, onRefresh }: AnimeFlowProps) {
   const visible = items.slice(startIndex, startIndex + windowSize);
   const visibleCount = Math.min(windowSize, total);
   const trackBaseWidth = visibleCount * CARD_BASE_WIDTH + Math.max(0, visibleCount - 1) * FLOW_GAP;
-  const flowBaseWidth = trackBaseWidth + NAV_BUTTON_SIZE * 2 + FLOW_GAP * 2;
+  // Use windowSize (not visibleCount) for the outer container's horizontal position,
+  // so the section title stays on the same vertical reference line as all other AnimeFlow
+  // sections regardless of how many items are actually shown.
+  const referenceTrackWidth = windowSize * CARD_BASE_WIDTH + Math.max(0, windowSize - 1) * FLOW_GAP;
+  const flowBaseWidth = referenceTrackWidth + NAV_BUTTON_SIZE * 2 + FLOW_GAP * 2;
   const navSlotClassName = "mt-32 flex h-12 w-12 flex-shrink-0 items-center justify-center";
   const navButtonClassName = `inline-flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-white/10 p-0
     transition-all duration-200 backdrop-blur-sm
@@ -257,6 +262,7 @@ export function AnimeFlow({ topic, items, onRefresh }: AnimeFlowProps) {
                   }
                   isHoverLocked={isHoverLocked}
                   expandDirection={resolveExpandDirection(index)}
+                  disableExpand={disableExpand}
                 />
               </div>
             ))}
