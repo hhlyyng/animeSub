@@ -11,6 +11,7 @@ export type QbittorrentSettings = {
   defaultSavePath: string;
   category: string;
   tags: string;
+  useAnimeSubPath: boolean;
 };
 
 export type MikanSettings = {
@@ -57,6 +58,7 @@ export type UpdateSettingsProfileRequest = {
     defaultSavePath: string;
     category?: string | null;
     tags?: string | null;
+    useAnimeSubPath?: boolean;
   };
   animeSub: {
     username?: string | null;

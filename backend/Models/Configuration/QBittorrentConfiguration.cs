@@ -50,6 +50,12 @@ public class QBittorrentConfiguration
     public bool PauseTorrentAfterAdd { get; set; } = false;
 
     /// <summary>
+    /// When true, downloads are placed in a subfolder named after the anime title
+    /// under DefaultSavePath (e.g. /anime download/咒術回戦/)
+    /// </summary>
+    public bool UseAnimeSubPath { get; set; } = false;
+
+    /// <summary>
     /// HTTP request timeout in seconds (default: 30)
     /// </summary>
     public int TimeoutSeconds { get; set; } = 30;

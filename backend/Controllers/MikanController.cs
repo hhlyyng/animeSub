@@ -455,7 +455,8 @@ public class MikanController : ControllerBase
                 normalizedHash,
                 request.Title,
                 0,
-                downloadSource);
+                downloadSource,
+                animeTitle: request.AnimeTitle);
         }
         catch (QBittorrentUnavailableException ex)
         {

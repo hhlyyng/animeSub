@@ -215,7 +215,8 @@ public class SettingsController : ControllerBase
                     PasswordConfigured: !string.IsNullOrWhiteSpace(password),
                     DefaultSavePath: defaultSavePath,
                     Category: string.IsNullOrWhiteSpace(category) ? DefaultQbCategory : category,
-                    Tags: string.IsNullOrWhiteSpace(tags) ? DefaultQbTags : tags),
+                    Tags: string.IsNullOrWhiteSpace(tags) ? DefaultQbTags : tags,
+                    UseAnimeSubPath: _configuration.GetValue<bool>("QBittorrent:UseAnimeSubPath")),
                 AnimeSub: new AnimeSubSettingsDto(
                     Username: animeSubUsername,
                     PasswordConfigured: !string.IsNullOrWhiteSpace(animeSubPassword)),
@@ -363,6 +364,8 @@ public class SettingsController : ControllerBase
                 qb["DefaultSavePath"] = defaultSavePath;
                 qb["Category"] = category;
                 qb["Tags"] = tags;
+                qb["UseAnimeSubPath"] = request.Qbittorrent.UseAnimeSubPath
+                    ?? _configuration.GetValue<bool>("QBittorrent:UseAnimeSubPath");
 
                 var animeSub = EnsureSection(root, "AnimeSub");
                 animeSub["Username"] = animeSubUsername;
@@ -928,7 +931,8 @@ public record QbittorrentSettingsDto(
     bool PasswordConfigured,
     string DefaultSavePath,
     string Category,
-    string Tags);
+    string Tags,
+    bool UseAnimeSubPath);
 
 public record AnimeSubSettingsDto(
     string Username,
@@ -963,7 +967,8 @@ public record UpdateQbittorrentSettingsRequest(
     string? Password,
     string? DefaultSavePath,
     string? Category,
-    string? Tags);
+    string? Tags,
+    bool? UseAnimeSubPath);
 
 public record UpdateAnimeSubSettingsRequest(
     string? Username,

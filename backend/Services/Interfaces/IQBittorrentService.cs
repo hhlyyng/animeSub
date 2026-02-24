@@ -73,6 +73,7 @@ public interface IQBittorrentService
     /// <param name="fileSize">File size in bytes</param>
     /// <param name="source">Download source (Manual/Subscription)</param>
     /// <param name="subscriptionId">Optional subscription ID</param>
+    /// <param name="animeTitle">Optional anime title used to build the sub-path when UseAnimeSubPath is enabled</param>
     /// <returns>True if torrent was added successfully</returns>
     Task<bool> AddTorrentWithTrackingAsync(
         string torrentUrl,
@@ -80,7 +81,8 @@ public interface IQBittorrentService
         string title,
         long fileSize,
         DownloadSource source,
-        int? subscriptionId = null);
+        int? subscriptionId = null,
+        string? animeTitle = null);
 
     /// <summary>
     /// Sync download progress for manual downloads from qBittorrent

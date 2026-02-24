@@ -23,6 +23,7 @@ type BaselineSnapshot = {
   defaultSavePath: string;
   category: string;
   tags: string;
+  useAnimeSubPath: boolean;
   pollingIntervalMinutes: string;
   subgroup: string;
   resolution: string;
@@ -248,6 +249,7 @@ export default function SettingPage() {
   const [defaultSavePath, setDefaultSavePath] = useState("");
   const [category, setCategory] = useState("anime");
   const [tags, setTags] = useState("AnimeSub");
+  const [useAnimeSubPath, setUseAnimeSubPath] = useState(false);
   const [pollingIntervalMinutes, setPollingIntervalMinutes] = useState("");
 
   const [subgroupPreference, setSubgroupPreference] = useState(DEFAULT_SUBGROUP);
@@ -378,6 +380,7 @@ export default function SettingPage() {
       setDefaultSavePath(data.qbittorrent.defaultSavePath || "");
       setCategory(data.qbittorrent.category || "anime");
       setTags(data.qbittorrent.tags || "AnimeSub");
+      setUseAnimeSubPath(data.qbittorrent.useAnimeSubPath ?? false);
       setPollingIntervalMinutes(String(data.mikan.pollingIntervalMinutes || ""));
       setSubgroupPreference(data.downloadPreferences.subgroup || DEFAULT_SUBGROUP);
       setResolutionPreference(data.downloadPreferences.resolution || DEFAULT_RESOLUTION);
@@ -393,6 +396,7 @@ export default function SettingPage() {
         defaultSavePath: (data.qbittorrent.defaultSavePath || "").trim(),
         category: (data.qbittorrent.category || "anime").trim(),
         tags: (data.qbittorrent.tags || "AnimeSub").trim(),
+        useAnimeSubPath: data.qbittorrent.useAnimeSubPath ?? false,
         pollingIntervalMinutes: String(data.mikan.pollingIntervalMinutes || "").trim(),
         subgroup: (data.downloadPreferences.subgroup || DEFAULT_SUBGROUP).trim(),
         resolution: (data.downloadPreferences.resolution || DEFAULT_RESOLUTION).trim(),
@@ -504,6 +508,7 @@ export default function SettingPage() {
   const passwordChanged = password.trim().length > 0;
   const categoryChanged = baseline ? category.trim() !== baseline.category : false;
   const tagsChanged = baseline ? tags.trim() !== baseline.tags : false;
+  const useAnimeSubPathChanged = baseline ? useAnimeSubPath !== baseline.useAnimeSubPath : false;
   const normalizedBaselinePolling = baseline ? normalizePollingText(baseline.pollingIntervalMinutes) : "";
   const pollingChanged = baseline ? normalizedCurrentPolling !== normalizedBaselinePolling : false;
 
@@ -521,6 +526,7 @@ export default function SettingPage() {
     qbConnectionChanged ||
     categoryChanged ||
     tagsChanged ||
+    useAnimeSubPathChanged ||
     pollingChanged ||
     preferenceChanged;
 
@@ -733,6 +739,7 @@ export default function SettingPage() {
           defaultSavePath: defaultSavePath.trim(),
           category: category.trim() || null,
           tags: tags.trim() || null,
+          useAnimeSubPath,
         },
         animeSub: {
           username: appUsername.trim(),
@@ -856,14 +863,10 @@ export default function SettingPage() {
         </h2>
 
         <div className="flex items-center justify-between py-2">
-          <div>
-            <p className="text-base font-normal text-gray-900">
-              {zh ? "启用随机推荐" : "Enable random recommendations"}
-            </p>
-            <p className="text-xs text-gray-500">
-              {zh ? "在主页显示随机推荐的动画 Feed" : "Show a random anime feed on the homepage"}
-            </p>
-          </div>
+          <FieldLabel
+            title={zh ? "启用随机推荐" : "Enable random recommendations"}
+            helpText={zh ? "在主页显示随机推荐的动画 Feed" : "Show a random anime feed on the homepage"}
+          />
             <button
               type="button"
               role="switch"
@@ -1199,6 +1202,38 @@ export default function SettingPage() {
               }}
               className="h-10 rounded-md border border-gray-300 px-3 text-sm"
             />
+          </div>
+
+          <div className="grid grid-cols-[300px_1fr] items-start gap-3">
+            <FieldLabel
+              title={zh ? "动漫子路径" : "Anime Sub-path"}
+              helpText={zh
+                ? "启用后，每部动漫的下载文件将归入以动漫名称命名的子文件夹。"
+                : "When enabled, downloads are placed in a subfolder named after the anime."}
+            />
+            <div className="flex items-center justify-end h-10">
+              <button
+                type="button"
+                role="switch"
+                aria-checked={useAnimeSubPath}
+                onClick={() => { setUseAnimeSubPath(v => !v); setQbSummaryMessage(""); }}
+                style={{
+                  width: "51px", height: "31px", borderRadius: "15.5px",
+                  padding: "2px", border: "none", boxSizing: "border-box",
+                  backgroundColor: useAnimeSubPath ? "#34C759" : "#AEAEB2",
+                  transition: "background-color 0.2s ease-in-out",
+                  cursor: "pointer", flexShrink: 0,
+                }}
+              >
+                <span style={{
+                  display: "block", width: "27px", height: "27px",
+                  borderRadius: "50%", backgroundColor: "white",
+                  transform: useAnimeSubPath ? "translateX(20px)" : "translateX(0)",
+                  transition: "transform 0.2s ease-in-out",
+                  boxShadow: "0 3px 8px rgba(0,0,0,0.15), 0 3px 1px rgba(0,0,0,0.06)",
+                }} />
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-[300px_1fr] gap-3">

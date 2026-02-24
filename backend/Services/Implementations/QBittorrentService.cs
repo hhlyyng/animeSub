@@ -321,13 +321,27 @@ public class QBittorrentService : IQBittorrentService
         string title,
         long fileSize,
         DownloadSource source,
-        int? subscriptionId = null)
+        int? subscriptionId = null,
+        string? animeTitle = null)
     {
         const string category = "anime";
         var normalizedHash = torrentHash.Trim().ToUpperInvariant();
         var baselineCount = await TryGetTorrentCountAsync(category);
 
-        var success = await AddTorrentAsync(torrentUrl, savePath: null, category: category);
+        string? effectiveSavePath;
+        if (CurrentConfig.UseAnimeSubPath
+            && !string.IsNullOrWhiteSpace(animeTitle)
+            && !string.IsNullOrWhiteSpace(CurrentConfig.DefaultSavePath))
+        {
+            var folder = SanitizeFolderName(animeTitle);
+            effectiveSavePath = CurrentConfig.DefaultSavePath.TrimEnd('/', '\\') + "/" + folder;
+        }
+        else
+        {
+            effectiveSavePath = CurrentConfig.DefaultSavePath;
+        }
+
+        var success = await AddTorrentAsync(torrentUrl, savePath: effectiveSavePath, category: category);
 
         if (!success)
         {
@@ -359,13 +373,13 @@ public class QBittorrentService : IQBittorrentService
             return false;
         }
 
-        var locationReady = await TryEnsureTorrentLocationAsync(normalizedHash, CurrentConfig.DefaultSavePath);
+        var locationReady = await TryEnsureTorrentLocationAsync(normalizedHash, effectiveSavePath);
         if (!locationReady)
         {
             _logger.LogWarning(
                 "Torrent added but failed to apply configured save path. Hash={Hash}, TargetPath={TargetPath}, Source={Source}",
                 normalizedHash,
-                CurrentConfig.DefaultSavePath,
+                effectiveSavePath,
                 source);
             return false;
         }
@@ -731,6 +745,12 @@ public class QBittorrentService : IQBittorrentService
     {
         return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+    }
+
+    private static string SanitizeFolderName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        return string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c)).Trim();
     }
 
     private static string TryResolveTorrentFilename(string torrentUrl)

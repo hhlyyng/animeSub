@@ -605,7 +605,8 @@ public class SubscriptionService : ISubscriptionService
                         item.Title,
                         item.FileSize ?? 0,
                         DownloadSource.Subscription,
-                        subscription.Id);
+                        subscription.Id,
+                        animeTitle: subscription.Title);
 
                     if (success)
                     {

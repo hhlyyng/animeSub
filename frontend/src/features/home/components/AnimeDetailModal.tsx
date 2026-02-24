@@ -872,7 +872,9 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
           torrentHash: requestHash,
           bangumiId: Number.isFinite(parsedBangumiId) && parsedBangumiId > 0 ? parsedBangumiId : undefined,
           mikanBangumiId: anime.mikan_bangumi_id,
-          animeTitle: anime.ch_title || anime.en_title || anime.jp_title,
+          animeTitle: language === "zh"
+            ? (anime.ch_title || anime.jp_title)
+            : (anime.en_title || anime.jp_title),
         });
         const effectiveHash = normalizeHash(qbHash);
         if (effectiveHash.length === 0) {
@@ -1244,7 +1246,9 @@ export function AnimeDetailModal({ anime, open, onClose }: AnimeDetailModalProps
               torrentHash: requestHash,
               bangumiId: Number.isFinite(parsedBangumiId) && parsedBangumiId > 0 ? parsedBangumiId : undefined,
               mikanBangumiId: subscribeMikanBangumiId,
-              animeTitle: anime.ch_title || anime.en_title || anime.jp_title,
+              animeTitle: language === "zh"
+                ? (anime.ch_title || anime.jp_title)
+                : (anime.en_title || anime.jp_title),
               subscriptionId: ensured.id,
             });
 
