@@ -336,6 +336,23 @@ public partial class MikanClient : IMikanClient
 
                 if (entries.Count > 0)
                 {
+                    // For each entry, fetch its /Home/Bangumi/{id} page to get:
+                    //   1. Authoritative Chinese title from <p class="bangumi-title">
+                    //   2. Direct Bangumi subject ID from the bgm.tv link
+                    // Both come from a single HTTP request per entry, all run in parallel.
+                    var infoTasks = entries
+                        .Select(e => FetchBangumiPageInfoAsync(e.MikanBangumiId))
+                        .ToList();
+                    var pageInfos = await Task.WhenAll(infoTasks);
+                    for (var i = 0; i < entries.Count; i++)
+                    {
+                        var (pageTitle, subjectId) = pageInfos[i];
+                        if (!string.IsNullOrWhiteSpace(pageTitle))
+                            entries[i].Title = pageTitle!;
+                        if (subjectId.HasValue)
+                            entries[i].BangumiSubjectId = subjectId;
+                    }
+
                     _logger.LogInformation("SearchAnimeEntries: found {Count} entries", entries.Count);
                     return entries;
                 }
@@ -1141,6 +1158,67 @@ public partial class MikanClient : IMikanClient
             Episode = item.Episode,
             IsCollection = item.IsCollection
         };
+    }
+
+    /// <summary>
+    /// Fetch /Home/Bangumi/{mikanBangumiId} once and extract both:
+    ///   - Title: text content of &lt;p class="bangumi-title"&gt; (strips child &lt;a&gt; RSS link)
+    ///   - BangumiSubjectId: numeric ID from the bgm.tv/subject/ link in bangumi-info
+    /// Returns (null, null) on network/parse failure so the caller can fall back gracefully.
+    /// </summary>
+    private async Task<(string? title, int? bangumiSubjectId)> FetchBangumiPageInfoAsync(string mikanBangumiId)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"Home/Bangumi/{mikanBangumiId}");
+            response.EnsureSuccessStatusCode();
+
+            var html = await response.Content.ReadAsStringAsync();
+            var doc = new HtmlDocument();
+            doc.LoadHtml(html);
+
+            // ── Title ────────────────────────────────────────────────────────────
+            // <p class="bangumi-title">咒术回战 怀玉･玉折 / 涩谷事变 <a ...>...</a></p>
+            // Only direct text nodes; the child <a> is the RSS icon link.
+            string? title = null;
+            var titleNode = doc.DocumentNode
+                .SelectSingleNode("//p[contains(@class,'bangumi-title')]");
+            if (titleNode != null)
+            {
+                var text = string.Concat(
+                    titleNode.ChildNodes
+                        .Where(n => n.NodeType == HtmlNodeType.Text)
+                        .Select(n => HtmlEntity.DeEntitize(n.InnerText)))
+                    .Trim();
+                if (!string.IsNullOrWhiteSpace(text)) title = text;
+            }
+
+            // ── Bangumi subject ID ────────────────────────────────────────────────
+            // <p class="bangumi-info">Bangumi番组计划链接：<br>
+            //   <a href="https://bgm.tv/subject/369304">...</a></p>
+            int? subjectId = null;
+            var bgmLink = doc.DocumentNode
+                .SelectSingleNode("//a[contains(@href,'bgm.tv/subject/')]");
+            if (bgmLink != null)
+            {
+                var href = bgmLink.GetAttributeValue("href", "");
+                var m = Regex.Match(href, @"bgm\.tv/subject/(\d+)");
+                if (m.Success && int.TryParse(m.Groups[1].Value, out var id))
+                    subjectId = id;
+            }
+
+            _logger.LogDebug(
+                "FetchBangumiPageInfo: MikanId={MikanId} → title=\"{Title}\", BangumiSubjectId={SubjectId}",
+                mikanBangumiId, title, subjectId);
+
+            return (title, subjectId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex,
+                "FetchBangumiPageInfo failed for MikanId {MikanId}", mikanBangumiId);
+            return (null, null);
+        }
     }
 
     private static string FormatFileSize(long bytes)

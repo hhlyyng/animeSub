@@ -259,6 +259,11 @@ public class MikanAnimeEntry
     public string MikanBangumiId { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string ImageUrl { get; set; } = string.Empty;
+    /// <summary>
+    /// Bangumi subject ID extracted directly from the /Home/Bangumi page.
+    /// When set, skips title-based search and uses GetSubjectDetailAsync directly.
+    /// </summary>
+    public int? BangumiSubjectId { get; set; }
 }
 
 /// <summary>

@@ -20,6 +20,7 @@ public class AnimeAggregationService : IAnimeAggregationService
     private readonly ITMDBClient _tmdbClient;
     private readonly IAniListClient _aniListClient;
     private readonly IJikanClient _jikanClient;
+    private readonly IMikanClient _mikanClient;
     private readonly IAnimeRepository _repository;
     private readonly IAnimeCacheService _cacheService;
     private readonly IResilienceService _resilienceService;
@@ -35,6 +36,7 @@ public class AnimeAggregationService : IAnimeAggregationService
         ITMDBClient tmdbClient,
         IAniListClient aniListClient,
         IJikanClient jikanClient,
+        IMikanClient mikanClient,
         IAnimeRepository repository,
         IAnimeCacheService cacheService,
         IResilienceService resilienceService,
@@ -44,6 +46,7 @@ public class AnimeAggregationService : IAnimeAggregationService
         _tmdbClient = tmdbClient ?? throw new ArgumentNullException(nameof(tmdbClient));
         _aniListClient = aniListClient ?? throw new ArgumentNullException(nameof(aniListClient));
         _jikanClient = jikanClient ?? throw new ArgumentNullException(nameof(jikanClient));
+        _mikanClient = mikanClient ?? throw new ArgumentNullException(nameof(mikanClient));
         _repository = repository ?? throw new ArgumentNullException(nameof(repository));
         _cacheService = cacheService ?? throw new ArgumentNullException(nameof(cacheService));
         _resilienceService = resilienceService ?? throw new ArgumentNullException(nameof(resilienceService));
@@ -1017,72 +1020,41 @@ public class AnimeAggregationService : IAnimeAggregationService
 
         try
         {
-            var subjectList = await _bangumiClient.SearchSubjectListAsync(query);
-            var animeDtos = new List<AnimeInfoDto>();
+            // Primary source: Mikan — only show anime that have download sources
+            var mikanEntries = await _mikanClient.SearchAnimeEntriesAsync(query);
 
-            if (subjectList.ValueKind == JsonValueKind.Array)
+            if (mikanEntries == null || mikanEntries.Count == 0)
             {
-                foreach (var subject in subjectList.EnumerateArray())
+                _logger.LogInformation("Mikan returned no results for query: {Query}", query);
+                return new AnimeListResponse
                 {
-                    if (cancellationToken.IsCancellationRequested) break;
-
-                    var id = subject.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
-                    if (id == 0) continue;
-
-                    var jpTitle = subject.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
-                    var chTitle = subject.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
-                    var chDesc = subject.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
-                    var airDate = subject.TryGetProperty("date", out var dateEl) ? dateEl.GetString() : null;
-
-                    var score = "0";
-                    if (subject.TryGetProperty("rating", out var rating) &&
-                        rating.TryGetProperty("score", out var scoreEl))
-                    {
-                        score = scoreEl.GetDouble().ToString("F1");
-                    }
-
-                    var portraitUrl = subject.TryGetProperty("images", out var images) &&
-                                      images.TryGetProperty("large", out var large)
-                                      ? large.GetString() ?? "" : "";
-
-                    // Enrich with TMDB (landscape + English data)
-                    var (enTitle, enDesc, landscapeUrl, tmdbUrl) = await EnrichWithTmdbAsync(jpTitle, airDate);
-
-                    // If TMDB didn't return landscape, try AniList
-                    var anilistUrl = "";
-                    if (string.IsNullOrEmpty(landscapeUrl))
-                    {
-                        var anilistData = await EnrichWithAniListAsync(jpTitle);
-                        if (anilistData != null)
-                        {
-                            landscapeUrl = anilistData.BannerImage ?? "";
-                            anilistUrl = anilistData.OriSiteUrl ?? "";
-                            if (string.IsNullOrEmpty(enTitle)) enTitle = anilistData.EnglishTitle ?? "";
-                            if (string.IsNullOrEmpty(enDesc)) enDesc = StripHtmlTags(anilistData.EnglishSummary ?? "");
-                        }
-                    }
-
-                    animeDtos.Add(new AnimeInfoDto
-                    {
-                        BangumiId = id.ToString(),
-                        JpTitle = jpTitle,
-                        ChTitle = chTitle,
-                        EnTitle = enTitle,
-                        ChDesc = string.IsNullOrEmpty(chDesc) ? "无可用中文介绍" : chDesc,
-                        EnDesc = string.IsNullOrEmpty(enDesc) ? "No English description available" : enDesc,
-                        Score = score,
-                        Images = new AnimeImagesDto { Portrait = portraitUrl, Landscape = landscapeUrl },
-                        ExternalUrls = new ExternalUrlsDto
-                        {
-                            Bangumi = $"https://bgm.tv/subject/{id}",
-                            Tmdb = tmdbUrl,
-                            Anilist = anilistUrl
-                        }
-                    });
-                }
+                    Success = true, DataSource = DataSource.Api, IsStale = false,
+                    Message = $"No results found for '{query}'",
+                    LastUpdated = DateTime.UtcNow, Count = 0,
+                    Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
+                };
             }
 
-            _logger.LogInformation("Search for '{Query}' returned {Count} results (enriched)", query, animeDtos.Count);
+            // Enrich each Mikan entry with Bangumi/TMDB/AniList in parallel
+            var entryTasks = mikanEntries
+                .Select(entry => ProcessMikanSearchEntryAsync(entry, cancellationToken))
+                .ToList();
+
+            var resultPairs = await Task.WhenAll(entryTasks);
+
+            var animeDtos = resultPairs
+                .Select(r => r.dto).Where(d => d != null).Select(d => d!).ToList();
+            var entities = resultPairs
+                .Select(r => r.entity).Where(e => e != null).Select(e => e!).ToList();
+
+            // Batch-save enriched data to DB
+            if (entities.Count > 0)
+            {
+                try { await _repository.SaveAnimeInfoBatchAsync(entities); }
+                catch (Exception ex) { _logger.LogWarning(ex, "Failed to batch-save search results to DB"); }
+            }
+
+            _logger.LogInformation("Search for '{Query}' returned {Count} results (Mikan-primary)", query, animeDtos.Count);
             return new AnimeListResponse
             {
                 Success = true, DataSource = DataSource.Api, IsStale = false,
@@ -1102,6 +1074,151 @@ public class AnimeAggregationService : IAnimeAggregationService
                 Animes = new List<AnimeInfoDto>(), RetryAttempts = 0
             };
         }
+    }
+
+    private async Task<(AnimeInfoDto? dto, AnimeInfoEntity? entity)> ProcessMikanSearchEntryAsync(
+        MikanAnimeEntry entry, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested) return (null, null);
+
+        // Always run TMDB enrichment in parallel with the Bangumi lookup.
+        var tmdbTask = EnrichWithTmdbAsync(entry.Title, null);
+
+        // Extract Bangumi fields
+        var bangumiId = 0;
+        var jpTitle = entry.Title; // Mikan title is authoritative
+        var chTitle = "";
+        var chDesc = "";
+        var bangumiUrl = "";
+        var portraitUrl = entry.ImageUrl; // Mikan poster as fallback
+        var airDate = (string?)null;
+        var score = "0";
+
+        // Prefer direct subject ID extracted from the Mikan bangumi page (no search needed).
+        // Fall back to title search + best-match scoring only when the ID is unavailable.
+        JsonElement bResult = default;
+        if (entry.BangumiSubjectId.HasValue)
+        {
+            // Direct lookup: GetSubjectDetailAsync returns the full record (no truncation),
+            // so no follow-up detail call is required.
+            try
+            {
+                var detailTask = _bangumiClient.GetSubjectDetailAsync(entry.BangumiSubjectId.Value);
+                await Task.WhenAll(new Task[] { detailTask, tmdbTask });
+                bResult = detailTask.IsCompletedSuccessfully ? detailTask.Result : default;
+            }
+            catch { /* partial results handled below */ }
+        }
+        else
+        {
+            // Fallback: search by title, pick best match by character-bag overlap score.
+            var bangumiListTask = _bangumiClient.SearchSubjectListAsync(entry.Title);
+            try { await Task.WhenAll(new Task[] { bangumiListTask, tmdbTask }); }
+            catch { /* partial results handled below */ }
+
+            if (bangumiListTask.IsCompletedSuccessfully)
+                bResult = FindBestBangumiMatch(bangumiListTask.Result, entry.Title);
+        }
+
+        if (bResult.ValueKind != JsonValueKind.Undefined)
+        {
+            bangumiId = bResult.TryGetProperty("id", out var idEl) ? idEl.GetInt32() : 0;
+            var rawName = bResult.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+            chTitle = bResult.TryGetProperty("name_cn", out var nameCnEl) ? nameCnEl.GetString() ?? "" : "";
+            chDesc = bResult.TryGetProperty("summary", out var summaryEl) ? summaryEl.GetString() ?? "" : "";
+            airDate = bResult.TryGetProperty("date", out var dateEl) ? dateEl.GetString() : null;
+
+            if (bResult.TryGetProperty("rating", out var rating) &&
+                rating.TryGetProperty("score", out var scoreEl))
+                score = scoreEl.GetDouble().ToString("F1");
+
+            var bgmPortrait = bResult.TryGetProperty("images", out var images) &&
+                              images.TryGetProperty("large", out var large)
+                              ? large.GetString() ?? "" : "";
+            if (!string.IsNullOrEmpty(bgmPortrait)) portraitUrl = bgmPortrait;
+
+            if (string.IsNullOrWhiteSpace(chTitle))
+            {
+                var resolved = TitleLanguageResolver.ResolveFromName(rawName, jpTitle: null, chTitle: null, enTitle: "");
+                chTitle = resolved.chTitle;
+            }
+
+            if (bangumiId > 0) bangumiUrl = $"https://bgm.tv/subject/{bangumiId}";
+
+            // Only fetch detail separately in the search-fallback path (small response may truncate summary).
+            // Direct-ID path already returns the full detail record.
+            if (!entry.BangumiSubjectId.HasValue && string.IsNullOrWhiteSpace(chDesc) && bangumiId > 0)
+            {
+                try
+                {
+                    var detail = await _bangumiClient.GetSubjectDetailAsync(bangumiId);
+                    chDesc = detail.TryGetProperty("summary", out var ds) ? ds.GetString() ?? "" : "";
+                }
+                catch (Exception ex) { _logger.LogDebug(ex, "Detail fetch failed for BangumiId {Id}", bangumiId); }
+            }
+        }
+
+        // Ensure tmdbTask is awaited even if Bangumi lookup path didn't await it
+        if (!tmdbTask.IsCompleted)
+        {
+            try { await tmdbTask; } catch { /* ignore */ }
+        }
+
+        // TMDB results (enTitle, enDesc, landscape, tmdbUrl)
+        var (enTitle, enDesc, landscapeUrl, tmdbUrl) = tmdbTask.IsCompletedSuccessfully
+            ? tmdbTask.Result : ("", "", "", "");
+
+        // AniList fallback if no landscape
+        var anilistUrl = "";
+        if (string.IsNullOrEmpty(landscapeUrl))
+        {
+            var anilistData = await EnrichWithAniListAsync(jpTitle);
+            if (anilistData != null)
+            {
+                landscapeUrl = anilistData.BannerImage ?? "";
+                anilistUrl = anilistData.OriSiteUrl ?? "";
+                if (string.IsNullOrEmpty(enTitle)) enTitle = anilistData.EnglishTitle ?? "";
+                if (string.IsNullOrEmpty(enDesc)) enDesc = StripHtmlTags(anilistData.EnglishSummary ?? "");
+            }
+        }
+
+        var dto = new AnimeInfoDto
+        {
+            BangumiId = bangumiId > 0 ? bangumiId.ToString() : "",
+            JpTitle = jpTitle,
+            ChTitle = chTitle,
+            EnTitle = enTitle,
+            ChDesc = string.IsNullOrEmpty(chDesc) ? "无可用中文介绍" : chDesc,
+            EnDesc = string.IsNullOrEmpty(enDesc) ? "No English description available" : enDesc,
+            Score = score,
+            Images = new AnimeImagesDto { Portrait = portraitUrl, Landscape = landscapeUrl },
+            ExternalUrls = new ExternalUrlsDto { Bangumi = bangumiUrl, Tmdb = tmdbUrl, Anilist = anilistUrl },
+            MikanBangumiId = entry.MikanBangumiId
+        };
+
+        // Only persist if we have a Bangumi ID to key on
+        AnimeInfoEntity? entity = bangumiId > 0
+            ? new AnimeInfoEntity
+            {
+                BangumiId = bangumiId,
+                NameJapanese = NullIfWhiteSpace(jpTitle),
+                NameChinese = NullIfWhiteSpace(chTitle),
+                NameEnglish = NullIfWhiteSpace(enTitle),
+                DescChinese = NullIfWhiteSpace(chDesc),
+                DescEnglish = NullIfWhiteSpace(enDesc),
+                Score = NullIfWhiteSpace(score),
+                ImagePortrait = NullIfWhiteSpace(portraitUrl),
+                ImageLandscape = NullIfWhiteSpace(landscapeUrl),
+                UrlBangumi = NullIfWhiteSpace(bangumiUrl),
+                UrlTmdb = NullIfWhiteSpace(tmdbUrl),
+                UrlAnilist = NullIfWhiteSpace(anilistUrl),
+                AirDate = NullIfWhiteSpace(airDate),
+                MikanBangumiId = entry.MikanBangumiId,
+                IsPreFetched = false
+            }
+            : null;
+
+        return (dto, entity);
     }
 
     #region Enrichment Helper Methods
@@ -1413,6 +1530,88 @@ public class AnimeAggregationService : IAnimeAggregationService
     }
 
     #endregion
+
+    /// <summary>
+    /// From a Bangumi search result array, pick the entry whose title best matches the Mikan entry title.
+    /// Uses a character-bag overlap score minus a length-difference penalty, evaluated against both
+    /// the Japanese name and the Chinese name_cn fields.  This handles simplified-Chinese ↔ Japanese
+    /// CJK discrepancies (e.g. "咒术回战" vs "呪術廻戦") by counting shared characters and
+    /// preferring candidates of similar total length, so season-specific titles beat the base title.
+    /// Falls back to the first element when the list is empty or all scores tie.
+    /// </summary>
+    private static JsonElement FindBestBangumiMatch(JsonElement subjectList, string mikanTitle)
+    {
+        if (subjectList.ValueKind != JsonValueKind.Array) return default;
+
+        JsonElement best = default;
+        int bestScore = int.MinValue;
+
+        foreach (var subject in subjectList.EnumerateArray())
+        {
+            var name   = subject.TryGetProperty("name",    out var n)   ? n.GetString()   ?? "" : "";
+            var nameCn = subject.TryGetProperty("name_cn", out var ncn) ? ncn.GetString() ?? "" : "";
+
+            int score = Math.Max(
+                ScoreTitleMatch(mikanTitle, name),
+                ScoreTitleMatch(mikanTitle, nameCn));
+
+            if (best.ValueKind == JsonValueKind.Undefined || score > bestScore)
+            {
+                bestScore = score;
+                best = subject;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Score how well <paramref name="candidate"/> matches <paramref name="query"/>.
+    /// Algorithm: count characters that appear in both strings (bag-of-chars intersection),
+    /// multiply by 10, then subtract the absolute length difference between the two normalized
+    /// strings.  This rewards specific, similarly-sized titles over short base titles.
+    /// </summary>
+    private static int ScoreTitleMatch(string query, string candidate)
+    {
+        if (string.IsNullOrEmpty(candidate)) return 0;
+
+        var q = NormalizeTitleForMatch(query);
+        var c = NormalizeTitleForMatch(candidate);
+
+        if (string.IsNullOrEmpty(q) || string.IsNullOrEmpty(c)) return 0;
+        if (q == c) return 100_000; // exact match wins unconditionally
+
+        // Build character-frequency bags and count intersection
+        var qBag = new Dictionary<char, int>();
+        foreach (var ch in q)
+            qBag[ch] = qBag.TryGetValue(ch, out var cnt) ? cnt + 1 : 1;
+
+        int common = 0;
+        var cBag = new Dictionary<char, int>();
+        foreach (var ch in c)
+        {
+            cBag[ch] = cBag.TryGetValue(ch, out var cnt) ? cnt + 1 : 1;
+            if (qBag.TryGetValue(ch, out var qCnt) && cBag[ch] <= qCnt)
+                common++;
+        }
+
+        return common * 10 - Math.Abs(q.Length - c.Length);
+    }
+
+    /// <summary>
+    /// Strip spaces and punctuation, keep only letters/digits/CJK, lower-case ASCII.
+    /// </summary>
+    private static string NormalizeTitleForMatch(string title)
+    {
+        var sb = new StringBuilder(title.Length);
+        foreach (var ch in title)
+        {
+            if (char.IsWhiteSpace(ch) || char.IsPunctuation(ch) || char.IsSymbol(ch))
+                continue;
+            sb.Append(char.ToLowerInvariant(ch));
+        }
+        return sb.ToString();
+    }
 
     private static string StripHtmlTags(string html)
     {
