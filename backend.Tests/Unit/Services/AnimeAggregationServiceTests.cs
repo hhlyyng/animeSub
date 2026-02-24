@@ -24,6 +24,7 @@ public class AnimeAggregationServiceTests
     private readonly Mock<ITMDBClient> _tmdbClientMock;
     private readonly Mock<IAniListClient> _aniListClientMock;
     private readonly Mock<IJikanClient> _jikanClientMock;
+    private readonly Mock<IMikanClient> _mikanClientMock;
     private readonly Mock<IAnimeRepository> _repositoryMock;
     private readonly Mock<IAnimeCacheService> _cacheServiceMock;
     private readonly Mock<IResilienceService> _resilienceServiceMock;
@@ -36,6 +37,7 @@ public class AnimeAggregationServiceTests
         _tmdbClientMock = new Mock<ITMDBClient>();
         _aniListClientMock = new Mock<IAniListClient>();
         _jikanClientMock = new Mock<IJikanClient>();
+        _mikanClientMock = new Mock<IMikanClient>();
         _repositoryMock = new Mock<IAnimeRepository>();
         _cacheServiceMock = new Mock<IAnimeCacheService>();
         _resilienceServiceMock = new Mock<IResilienceService>();
@@ -53,6 +55,7 @@ public class AnimeAggregationServiceTests
             _tmdbClientMock.Object,
             _aniListClientMock.Object,
             _jikanClientMock.Object,
+            _mikanClientMock.Object,
             _repositoryMock.Object,
             _cacheServiceMock.Object,
             _resilienceServiceMock.Object,

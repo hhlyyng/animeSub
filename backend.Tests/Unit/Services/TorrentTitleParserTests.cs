@@ -11,6 +11,9 @@ public class TorrentTitleParserTests
     [InlineData("[\u685c\u90fd\u5b57\u5e55\u7ec4] \u6709\u6816\u5ddd\u70bc\u539f\u6765\u662f\u5973\u5b69\u5b50\u554a\u3002 / Arisugawa Ren tte Honto wa Onna Nanda yo ne. [03][1080P][\u7e41\u4f53\u5185\u5d4c]", 3)]
     [InlineData("[\u685c\u90fd\u5b57\u5e55\u7ec4] \u6709\u6816\u5ddd\u70bc\u539f\u6765\u662f\u5973\u5b69\u5b50\u554a\u3002 / Arisugawa Ren tte Honto wa Onna Nanda yo ne. [01][1080p][\u7b80\u7e41\u5185\u5c01]", 1)]
     [InlineData("[\u9ed2\u30cd\u30ba\u30df\u305f\u3061] \u6709\u6816\u5ddd\u70bc\u5176\u5b9e\u662f\u4e2a\u5973\u751f\u5427\u3002 / Arisugawa Ren tte Honto wa Onna Nanda yo ne. - 04 (ABEMA 1920x1080 AVC AAC MP4)", 4)]
+    // Bug 7: S02 - 23 (two-digit season + separator + episode) must not be treated as a range
+    [InlineData("[Lilith-Raws] \u5492\u672f\u56de\u6218 / Jujutsu Kaisen S02 - 23 [Baha][WebDL 1080p AVC AAC][CHT]", 23)]
+    [InlineData("[jibaketa\u5408\u6210&\u97f3\u9891\u538b\u5236][\u4ee3\u7406\u5546\u7ca4\u8bed]\u5492\u672f\u56de\u6218 \u7b2c\u4e8c\u5b63 / Jujutsu Kaisen S2 - 23 END [\u7ca4\u65e5\u53cc\u8bed+\u5185\u5c01\u7e41\u4f53\u4e2d\u6587\u5b57\u5e55](WEB 1920x1080 AVC AACx2 SRT Ani-One CHT)", 23)]
     [InlineData("[Group] Anime Name S02E05 [1080P][CHS]", 5)]
     [InlineData("[Group] Anime Name EP12 [720p]", 12)]
     [InlineData("[Group] Anime Name \u7b2c13\u8bdd [1080p]", 13)]

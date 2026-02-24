@@ -78,7 +78,8 @@ public class MikanControllerTests : IDisposable
             _jikanClientMock.Object,
             _qbittorrentServiceMock.Object,
             _loggerMock.Object,
-            _serviceProvider);
+            _serviceProvider,
+            new Mock<System.Net.Http.IHttpClientFactory>().Object);
 
         _sut.ControllerContext = new ControllerContext
         {

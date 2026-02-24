@@ -8,6 +8,7 @@ using backend.Controllers;
 using backend.Models;
 using backend.Services;
 using backend.Services.Interfaces;
+using backend.Services.Repositories;
 using backend.Services.Validators;
 using backend.Tests.Fixtures;
 
@@ -20,6 +21,8 @@ public class AnimeControllerTests
 {
     private readonly Mock<IAnimeAggregationService> _aggregationServiceMock;
     private readonly Mock<ITokenStorageService> _tokenStorageMock;
+    private readonly Mock<IAnimeRepository> _animeRepositoryMock;
+    private readonly Mock<IAnimePoolService> _animePoolServiceMock;
     private readonly TokenValidator _tokenValidator;
     private readonly Mock<ILogger<AnimeController>> _loggerMock;
     private readonly Mock<ILogger<TokenValidator>> _tokenValidatorLoggerMock;
@@ -29,6 +32,8 @@ public class AnimeControllerTests
     {
         _aggregationServiceMock = new Mock<IAnimeAggregationService>();
         _tokenStorageMock = new Mock<ITokenStorageService>();
+        _animeRepositoryMock = new Mock<IAnimeRepository>();
+        _animePoolServiceMock = new Mock<IAnimePoolService>();
         _loggerMock = new Mock<ILogger<AnimeController>>();
         _tokenValidatorLoggerMock = new Mock<ILogger<TokenValidator>>();
 
@@ -39,6 +44,8 @@ public class AnimeControllerTests
             _aggregationServiceMock.Object,
             _tokenStorageMock.Object,
             _tokenValidator,
+            _animeRepositoryMock.Object,
+            _animePoolServiceMock.Object,
             _loggerMock.Object);
 
         // Set up HttpContext
