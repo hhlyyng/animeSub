@@ -135,17 +135,6 @@ const SideBar = ({ language, currentPage, onLanguageChange }: SideBarProps) => {
         />
 
         <SidebarButton
-          icon={<SearchIcon />}
-          label={currentLanguage.search}
-          variant="action"
-          collapsed={isCollapsed}
-          onClick={() => navigateToPage('search')}
-          showtext={showText}
-          active={currentPage === 'search'}
-          language={language}
-        />
-
-        <SidebarButton
           icon={<DownloadIcon />}
           label={currentLanguage.download}
           variant="action"
@@ -153,6 +142,17 @@ const SideBar = ({ language, currentPage, onLanguageChange }: SideBarProps) => {
           onClick={() => navigateToPage("download")}
           showtext={showText}
           active={currentPage === "download"}
+          language={language}
+        />
+
+        <SidebarButton
+          icon={<SearchIcon />}
+          label={currentLanguage.search}
+          variant="action"
+          collapsed={isCollapsed}
+          onClick={() => navigateToPage('search')}
+          showtext={showText}
+          active={currentPage === 'search'}
           language={language}
         />
 

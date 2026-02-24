@@ -8,6 +8,7 @@ type AnimeCardProps = {
   onHoverChange?: (isHovered: boolean, hasLandscape: boolean) => void;
   isHoverLocked?: boolean;
   expandDirection?: "right" | "center" | "left";
+  disableExpand?: boolean;
 };
 
 const BASE_COVER_WIDTH = 200;
@@ -27,6 +28,7 @@ export function AnimeCard({
   onHoverChange,
   isHoverLocked,
   expandDirection = "right",
+  disableExpand = false,
 }: AnimeCardProps) {
   const [isHovered, setIsHovered] = useState(false);
   const language = useAppStore((state) => state.language);
@@ -37,12 +39,14 @@ export function AnimeCard({
     : (anime.en_title || anime.ch_title || anime.jp_title);
   const displayTitle = normalizeTitleForDisplay(rawDisplayTitle);
 
-  const hasLandscape = !!anime.images?.landscape;
+  // effectiveLandscape = false when disableExpand, so ALL expand-related logic
+  // (width, translateX, onHoverChange callbacks) treats this card as having no
+  // landscape image — preventing both self-expansion and sibling wrapper shifts.
+  const effectiveLandscape = !disableExpand && !!anime.images?.landscape;
 
-  // Expand only when hovered and not blocked by hover lock.
-  const shouldExpand = isHovered && !isHoverLocked;
+  const shouldExpand = isHovered && !isHoverLocked && effectiveLandscape;
   const coverTranslateX =
-    shouldExpand && hasLandscape
+    shouldExpand
       ? expandDirection === "left"
         ? -EXPAND_WIDTH_DIFF
         : expandDirection === "center"
@@ -51,21 +55,21 @@ export function AnimeCard({
       : 0;
 
   useEffect(() => {
-    if (!isHoverLocked && isHovered && hasLandscape) {
-      onHoverChange?.(true, hasLandscape);
+    if (!isHoverLocked && isHovered && effectiveLandscape) {
+      onHoverChange?.(true, effectiveLandscape);
     }
-  }, [isHoverLocked, isHovered, hasLandscape, onHoverChange]);
+  }, [isHoverLocked, isHovered, effectiveLandscape, onHoverChange]);
 
   const handleMouseEnter = () => {
     setIsHovered(true);
     if (!isHoverLocked) {
-      onHoverChange?.(true, hasLandscape);
+      onHoverChange?.(true, effectiveLandscape);
     }
   };
 
   const handleMouseLeave = () => {
     setIsHovered(false);
-    onHoverChange?.(false, hasLandscape);
+    onHoverChange?.(false, effectiveLandscape);
   };
 
   return (
@@ -81,14 +85,14 @@ export function AnimeCard({
         className="relative overflow-hidden bg-gray-100 transition-[width,transform] duration-300 ease-in-out"
         style={{
           height: "300px",
-          width: shouldExpand && hasLandscape
+          width: shouldExpand
             ? `${EXPANDED_COVER_WIDTH}px`
             : `${BASE_COVER_WIDTH}px`,
           transform: `translateX(${coverTranslateX}px)`,
         }}
       >
         <img
-          src={shouldExpand && hasLandscape
+          src={shouldExpand
             ? anime.images.landscape
             : anime.images?.portrait}
           alt={displayTitle}
@@ -100,7 +104,7 @@ export function AnimeCard({
       <div
         className="mt-2 break-all text-sm font-semibold text-gray-900 transition-[width,transform] duration-300 ease-in-out"
         style={{
-          width: shouldExpand && hasLandscape
+          width: shouldExpand
             ? `${EXPANDED_COVER_WIDTH}px`
             : `${BASE_COVER_WIDTH}px`,
           transform: `translateX(${coverTranslateX}px)`,
