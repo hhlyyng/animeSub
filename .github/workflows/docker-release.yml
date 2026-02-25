@@ -80,13 +80,18 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
 
-      # ── Export arm64 tar for manual import ───────────────────────────────
-      - name: Export arm64 images as tar
+      # ── Export tar images for manual import ──────────────────────────────
+      - name: Export arm64 and amd64 images as tar
         run: |
           docker pull --platform linux/arm64 ${{ env.BACKEND_IMAGE }}:latest
           docker pull --platform linux/arm64 ${{ env.FRONTEND_IMAGE }}:latest
-          docker save ${{ env.BACKEND_IMAGE }}:latest -o backend-arm64.tar
-          docker save ${{ env.FRONTEND_IMAGE }}:latest -o frontend-arm64.tar
+          docker save ${{ env.BACKEND_IMAGE }}:latest -o animesub-backend-arm64.tar
+          docker save ${{ env.FRONTEND_IMAGE }}:latest -o animesub-frontend-arm64.tar
+
+          docker pull --platform linux/amd64 ${{ env.BACKEND_IMAGE }}:latest
+          docker pull --platform linux/amd64 ${{ env.FRONTEND_IMAGE }}:latest
+          docker save ${{ env.BACKEND_IMAGE }}:latest -o animesub-backend-amd64.tar
+          docker save ${{ env.FRONTEND_IMAGE }}:latest -o animesub-frontend-amd64.tar
 
       # ── GitHub Release ────────────────────────────────────────────────────
       - name: Create GitHub Release
@@ -95,5 +100,7 @@ jobs:
           generate_release_notes: true
           files: |
             docker-compose.yml
-            backend-arm64.tar
-            frontend-arm64.tar
+            animesub-backend-arm64.tar
+            animesub-frontend-arm64.tar
+            animesub-backend-amd64.tar
+            animesub-frontend-amd64.tar
