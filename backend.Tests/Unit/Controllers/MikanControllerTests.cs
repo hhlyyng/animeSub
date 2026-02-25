@@ -105,6 +105,7 @@ public class MikanControllerTests : IDisposable
                 request.Title,
                 0,
                 DownloadSource.Manual,
+                null,
                 null))
             .ReturnsAsync(true);
 
@@ -181,7 +182,8 @@ public class MikanControllerTests : IDisposable
                 It.IsAny<string>(),
                 It.IsAny<long>(),
                 It.IsAny<DownloadSource>(),
-                It.IsAny<int?>()),
+                It.IsAny<int?>(),
+                It.IsAny<string?>()),
             Times.Never);
     }
 
@@ -203,6 +205,7 @@ public class MikanControllerTests : IDisposable
                 request.Title,
                 0,
                 DownloadSource.Manual,
+                null,
                 null))
             .ReturnsAsync(true);
 
@@ -242,7 +245,8 @@ public class MikanControllerTests : IDisposable
                 It.IsAny<string>(),
                 It.IsAny<long>(),
                 It.IsAny<DownloadSource>(),
-                It.IsAny<int?>()),
+                It.IsAny<int?>(),
+                It.IsAny<string?>()),
             Times.Never);
     }
 
@@ -265,6 +269,7 @@ public class MikanControllerTests : IDisposable
                 request.Title,
                 0,
                 DownloadSource.Manual,
+                null,
                 null))
             .ThrowsAsync(new QBittorrentUnavailableException(
                 "qBittorrent is offline or unreachable.",
