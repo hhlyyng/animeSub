@@ -8,7 +8,6 @@ logs/
 *.db
 *.db-shm
 *.db-wal
-Data/
 appsettings.user.json
 appsettings.runtime.json
 appsettings.json.bak
