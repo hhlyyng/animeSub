@@ -113,7 +113,6 @@ export function AnimeFlow({ topic, items, onRefresh, disableExpand = false }: An
 
   const visible = items.slice(startIndex, startIndex + windowSize);
   const visibleCount = Math.min(windowSize, total);
-  const trackBaseWidth = visibleCount * CARD_BASE_WIDTH + Math.max(0, visibleCount - 1) * FLOW_GAP;
   // Use windowSize (not visibleCount) for the outer container's horizontal position,
   // so the section title stays on the same vertical reference line as all other AnimeFlow
   // sections regardless of how many items are actually shown.
