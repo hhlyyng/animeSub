@@ -85,3 +85,7 @@ audit_log/
 # =====================
 /tools/
 /data/
+
+# Runtime data files
+/changelog.md
+/qb_torrents.json
