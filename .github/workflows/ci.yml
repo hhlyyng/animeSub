@@ -26,4 +26,4 @@ jobs:
         run: dotnet build backend.Tests/backend.Tests.csproj --no-restore -c Release
 
       - name: Test
-        run: dotnet test backend.Tests/backend.Tests.csproj --no-build -c Release --logger "github;verbosity=normal"
+        run: dotnet test backend.Tests/backend.Tests.csproj --no-build -c Release --logger "console;verbosity=normal"
