@@ -89,3 +89,4 @@ audit_log/
 # Runtime data files
 /changelog.md
 /qb_torrents.json
+docs/.vitepress/cache/
