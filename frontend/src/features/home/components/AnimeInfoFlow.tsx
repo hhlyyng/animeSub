@@ -112,7 +112,6 @@ export function AnimeFlow({ topic, items, onRefresh, disableExpand = false }: An
   const goRight = () => canGoRight && setStartIndex(s => clampStart(s + step));
 
   const visible = items.slice(startIndex, startIndex + windowSize);
-  const visibleCount = Math.min(windowSize, total);
   // Use windowSize (not visibleCount) for the outer container's horizontal position,
   // so the section title stays on the same vertical reference line as all other AnimeFlow
   // sections regardless of how many items are actually shown.
