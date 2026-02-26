@@ -21,6 +21,7 @@ yarn-debug.log*
 yarn-error.log*
 package-lock.json
 !frontend/package-lock.json
+!docs/package-lock.json
 
 # =====================
 # .NET / C#
