@@ -33,8 +33,10 @@ services:
     ports:
       - "5072:5072"
     volumes:
-      - ./config:/app/data
+      - ./config:/app/data    # required: maps host directory to /app/data inside the container
 ```
+
+> **Note:** The volume mount is required. All data (database, config, uploads) is stored in `/app/data` inside the container. Without this mount, all data is lost when the container is removed or updated.
 
 ### Change the port
 

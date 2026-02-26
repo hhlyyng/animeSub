@@ -65,7 +65,7 @@ mkdir animesub &amp;&amp; cd animesub
 docker compose up -d
 
 <span class="hp-cmt">{{ t.code.c3 }}</span>
-open http://localhost:3000</pre>
+open http://localhost:5072</pre>
         </div>
 
       </div>
