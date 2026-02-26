@@ -171,7 +171,8 @@ public class AuthService : IAuthService
         }
 
         var secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
-        var filePath = Path.Combine(_environment.ContentRootPath, "appsettings.runtime.json");
+        var dataDir = _configuration["DataDir"] ?? _environment.ContentRootPath;
+        var filePath = Path.Combine(dataDir, "appsettings.runtime.json");
 
         JsonObject root;
         if (File.Exists(filePath))

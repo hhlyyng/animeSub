@@ -58,11 +58,13 @@ jobs:
       # ── Export tar for manual import ──────────────────────────────────────
       - name: Export arm64 and amd64 images as tar
         run: |
+          VERSION=${{ github.ref_name }}
+
           docker pull --platform linux/arm64 ${{ env.IMAGE }}:latest
-          docker save ${{ env.IMAGE }}:latest -o animesub-arm64.tar
+          docker save ${{ env.IMAGE }}:latest -o animesub-${VERSION}-arm64.tar
 
           docker pull --platform linux/amd64 ${{ env.IMAGE }}:latest
-          docker save ${{ env.IMAGE }}:latest -o animesub-amd64.tar
+          docker save ${{ env.IMAGE }}:latest -o animesub-${VERSION}-amd64.tar
 
       # ── GitHub Release ────────────────────────────────────────────────────
       - name: Create GitHub Release
@@ -71,5 +73,5 @@ jobs:
           generate_release_notes: true
           files: |
             docker-compose.yml
-            animesub-arm64.tar
-            animesub-amd64.tar
+            animesub-${{ github.ref_name }}-arm64.tar
+            animesub-${{ github.ref_name }}-amd64.tar

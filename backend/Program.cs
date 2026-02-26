@@ -14,6 +14,10 @@ using backend.Services.Implementations;
 using backend.Services.Repositories;
 using backend.Middleware;
 
+// Ensure UTF-8 output for Docker logs
+Console.OutputEncoding = Encoding.UTF8;
+Console.InputEncoding = Encoding.UTF8;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Determine data directory (Docker: set DATA_DIR env var, e.g. /app/data)
