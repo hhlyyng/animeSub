@@ -7,8 +7,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  BACKEND_IMAGE: ghcr.io/hhlyyng/anime-subscription-backend
-  FRONTEND_IMAGE: ghcr.io/hhlyyng/anime-subscription-frontend
+  IMAGE: ghcr.io/hhlyyng/animesub
 
 jobs:
   build-and-push:
@@ -21,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU (for ARM cross-compilation)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -34,64 +33,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── Backend ──────────────────────────────────────────────────────────
-      - name: Extract metadata for backend
-        id: backend-meta
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.BACKEND_IMAGE }}
+          images: ${{ env.IMAGE }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
-      - name: Build and push backend (amd64 + arm64)
+      - name: Build and push (amd64 + arm64)
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: .
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.backend-meta.outputs.tags }}
-          labels: ${{ steps.backend-meta.outputs.labels }}
-          cache-from: type=gha,scope=backend
-          cache-to: type=gha,scope=backend,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      # ── Frontend ─────────────────────────────────────────────────────────
-      - name: Extract metadata for frontend
-        id: frontend-meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.FRONTEND_IMAGE }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-
-      - name: Build and push frontend (amd64 + arm64)
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.frontend-meta.outputs.tags }}
-          labels: ${{ steps.frontend-meta.outputs.labels }}
-          build-args: |
-            VITE_API_BASE_URL=/api
-          cache-from: type=gha,scope=frontend
-          cache-to: type=gha,scope=frontend,mode=max
-
-      # ── Export tar images for manual import ──────────────────────────────
+      # ── Export tar for manual import ──────────────────────────────────────
       - name: Export arm64 and amd64 images as tar
         run: |
-          docker pull --platform linux/arm64 ${{ env.BACKEND_IMAGE }}:latest
-          docker pull --platform linux/arm64 ${{ env.FRONTEND_IMAGE }}:latest
-          docker save ${{ env.BACKEND_IMAGE }}:latest -o animesub-backend-arm64.tar
-          docker save ${{ env.FRONTEND_IMAGE }}:latest -o animesub-frontend-arm64.tar
+          docker pull --platform linux/arm64 ${{ env.IMAGE }}:latest
+          docker save ${{ env.IMAGE }}:latest -o animesub-arm64.tar
 
-          docker pull --platform linux/amd64 ${{ env.BACKEND_IMAGE }}:latest
-          docker pull --platform linux/amd64 ${{ env.FRONTEND_IMAGE }}:latest
-          docker save ${{ env.BACKEND_IMAGE }}:latest -o animesub-backend-amd64.tar
-          docker save ${{ env.FRONTEND_IMAGE }}:latest -o animesub-frontend-amd64.tar
+          docker pull --platform linux/amd64 ${{ env.IMAGE }}:latest
+          docker save ${{ env.IMAGE }}:latest -o animesub-amd64.tar
 
       # ── GitHub Release ────────────────────────────────────────────────────
       - name: Create GitHub Release
@@ -100,7 +71,5 @@ jobs:
           generate_release_notes: true
           files: |
             docker-compose.yml
-            animesub-backend-arm64.tar
-            animesub-frontend-arm64.tar
-            animesub-backend-amd64.tar
-            animesub-frontend-amd64.tar
+            animesub-arm64.tar
+            animesub-amd64.tar

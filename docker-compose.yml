@@ -1,31 +1,11 @@
 services:
-  backend:
-    image: ghcr.io/hhlyyng/anime-subscription-backend:latest
+  animesub:
+    image: ghcr.io/hhlyyng/animesub:latest
     restart: unless-stopped
+    ports:
+      - "5072:5072"    # <-- change left port to your preferred host port
     volumes:
       - ./config:/app/data
     environment:
       - DATA_DIR=/app/data
       - ASPNETCORE_ENVIRONMENT=Production
-      # Backend is not exposed to the host; all traffic goes through the nginx proxy,
-      # so CORS is never triggered by the browser. * is safe here.
-      - CORS_ORIGINS=*
-    networks:
-      - anime_net
-
-  frontend:
-    image: ghcr.io/hhlyyng/anime-subscription-frontend:latest
-    restart: unless-stopped
-    ports:
-      - "3000:80"    # <-- change 3000 to your preferred port
-    environment:
-      - BACKEND_HOST=backend
-      - BACKEND_PORT=5072
-      - NGINX_ENVSUBST_FILTER=BACKEND_HOST|BACKEND_PORT
-    depends_on:
-      - backend
-    networks:
-      - anime_net
-
-networks:
-  anime_net:

@@ -298,30 +298,28 @@ app.UseAuthorization();
 // Map controllers
 app.MapControllers();
 
-// Health check endpoints
-app.MapGet("/", (backend.Services.HealthCheckService healthCheck) =>
+// Serve frontend static files (wwwroot/) when present
+var wwwrootPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+if (Directory.Exists(wwwrootPath))
 {
-    return Results.Ok(new
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+    // SPA fallback: all non-API routes return index.html
+    app.MapFallbackToFile("index.html");
+}
+else
+{
+    // No frontend bundled — return API info at root
+    app.MapGet("/", (backend.Services.HealthCheckService healthCheck) =>
     {
-        status = "running",
-        timestamp = DateTime.UtcNow,
-        message = "Anime Subscription API",
-        endpoints = new[]
+        return Results.Ok(new
         {
-            "GET /api/anime/today - Get today's anime schedule",
-            "GET /api/subscription - Get all subscriptions",
-            "GET /api/subscription/bangumi/{bangumiId} - Get subscription by BangumiId",
-            "POST /api/subscription - Create subscription",
-            "POST /api/subscription/ensure - Ensure subscription exists and enabled",
-            "POST /api/subscription/{id}/cancel - Cancel subscription (delete or keep files)",
-            "POST /api/subscription/{id}/check - Manual RSS check",
-            "POST /api/subscription/check-all - Check all subscriptions",
-            "GET /health - Comprehensive health check",
-            "GET /health/live - Liveness probe",
-            "GET /health/ready - Readiness probe"
-        }
+            status = "running",
+            timestamp = DateTime.UtcNow,
+            message = "Anime Subscription API",
+        });
     });
-});
+}
 
 app.MapGet("/health/live", (backend.Services.HealthCheckService healthCheck) =>
 {
