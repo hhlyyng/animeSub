@@ -286,7 +286,8 @@ public class AuthController : ControllerBase
 
     private async Task SaveRuntimeSettingsAsync(Action<JsonObject> mutate)
     {
-        var filePath = Path.Combine(_environment.ContentRootPath, RuntimeSettingsFileName);
+        var dataDir = _configuration["DataDir"] ?? _environment.ContentRootPath;
+        var filePath = Path.Combine(dataDir, RuntimeSettingsFileName);
 
         await RuntimeSettingsFileLock.WaitAsync();
         try
