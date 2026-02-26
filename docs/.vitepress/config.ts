@@ -98,7 +98,7 @@ export default defineConfig({
 
   themeConfig: {
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/hhlyyng/anime-subscription' }
+      { icon: 'github', link: 'https://github.com/hhlyyng/AnimeSub' }
     ],
     search: {
       provider: 'local'

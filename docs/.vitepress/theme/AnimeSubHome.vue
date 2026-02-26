@@ -14,7 +14,7 @@
       </div>
       <div class="hp-actions">
         <a class="hp-btn-primary" :href="withBase(t.startLink)">{{ t.startBtn }}</a>
-        <a class="hp-btn-ghost" href="https://github.com/hhlyyng/anime-subscription" target="_blank">
+        <a class="hp-btn-ghost" href="https://github.com/hhlyyng/AnimeSub" target="_blank">
           GitHub <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><path d="M3.5 3a.5.5 0 0 0 0 1H7.3L2.15 9.15a.5.5 0 1 0 .7.7L8 4.7V8.5a.5.5 0 0 0 1 0v-5a.5.5 0 0 0-.5-.5h-5Z"/></svg>
         </a>
       </div>

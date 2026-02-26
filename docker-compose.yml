@@ -3,9 +3,6 @@ services:
     image: ghcr.io/hhlyyng/animesub:latest
     restart: unless-stopped
     ports:
-      - "5072:5072"    # <-- change left port to your preferred host port
+      - "5072:5072"    # change the left port to your preferred host port
     volumes:
-      - ./config:/app/data
-    environment:
-      - DATA_DIR=/app/data
-      - ASPNETCORE_ENVIRONMENT=Production
+      - ./config:/app/data    # persistent data: database, runtime config

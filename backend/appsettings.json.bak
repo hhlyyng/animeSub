@@ -1,0 +1,67 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "*",
+  "ApiTokens": {
+    "TmdbToken": "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI4YmE1ZDJhMmNkMzU2ZmRiOTM2MTAxZmJlZDhjY2MzZiIsIm5iZiI6MTY3OTA3Mzg2MC4zMTIsInN1YiI6IjY0MTRhMjQ0YTZjMTA0MDBmNzYzZThhYyIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.siaF1jGz406s8frVmvGnyMN34rbPfC3bgsvltp7l5rc"
+  },
+  "ApiConfiguration": {
+    "Bangumi": {
+      "BaseUrl": "https://api.bgm.tv",
+      "TimeoutSeconds": 30
+    },
+    "TMDB": {
+      "BaseUrl": "https://api.themoviedb.org/3",
+      "ImageBaseUrl": "https://image.tmdb.org/t/p/",
+      "TimeoutSeconds": 30
+    },
+    "AniList": {
+      "BaseUrl": "https://graphql.anilist.co",
+      "TimeoutSeconds": 30
+    },
+    "Jikan": {
+      "BaseUrl": "https://api.jikan.moe/v4",
+      "TimeoutSeconds": 30
+    }
+  },
+  "Mikan": {
+    "BaseUrl": "https://mikanani.me",
+    "PollingIntervalMinutes": 30,
+    "EnablePolling": true,
+    "MaxSubscriptionsPerPoll": 50,
+    "TimeoutSeconds": 30,
+    "FeedCacheTtlMinutes": 15,
+    "StartupDelaySeconds": 30
+  },
+  "QBittorrent": {
+    "Host": "192.168.32.100",
+    "Port": 8080,
+    "Username": "admin",
+    "Password": "liangadmin",
+    "DefaultSavePath": "/anime download",
+    "Category": "anime",
+    "FailedLoginBlockSeconds": 120,
+    "OfflineSuspendSeconds": 45,
+    "PauseTorrentAfterAdd": false,
+    "TimeoutSeconds": 30,
+    "UseAnimeSubPath": false
+  },
+  "AnimeSub": {
+    "Username": "",
+    "Password": ""
+  },
+  "Auth": {
+    "JwtSecret": "",
+    "TokenExpirationDays": 7
+  },
+  "PreFetch": {
+    "Enabled": true,
+    "ScheduleHour": 3,
+    "RunOnStartup": true,
+    "MaxConcurrency": 3
+  }
+}

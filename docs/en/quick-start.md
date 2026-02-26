@@ -1,31 +1,28 @@
 # Quick Start
 
-This guide deploys AnimeSub using Docker Compose — the easiest way to get started.
+This guide deploys AnimeSub using Docker — the easiest way to get started.
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed
+- [Docker](https://docs.docker.com/get-docker/) installed
 - qBittorrent installed with **WebUI enabled** (Tools → Options → Web UI)
 
 ## 1. Create docker-compose.yml
 
-In your desired directory (e.g., `~/animesub/`), create a `docker-compose.yml` file:
+In your desired directory (e.g., `/opt/animesub/`), create a `docker-compose.yml` file:
 
 ```yaml
 services:
   animesub:
-    image: ghcr.io/hhlyyng/anime-subscription:latest
-    container_name: animesub
+    image: ghcr.io/hhlyyng/animesub:latest
+    restart: unless-stopped
     ports:
-      - "3000:80"
+      - "5072:5072"
     volumes:
       - ./config:/app/data
-    restart: unless-stopped
-    environment:
-      - ASPNETCORE_ENVIRONMENT=Production
 ```
 
-> **Note**: The `./config` directory stores the database and runtime configuration. Data persists across restarts.
+Or download it directly from the [latest release](https://github.com/hhlyyng/AnimeSub/releases/latest).
 
 ## 2. Start the Service
 
@@ -36,16 +33,16 @@ docker compose up -d
 Once started, open your browser and navigate to:
 
 ```
-http://localhost:3000
+http://localhost:5072
 ```
 
 ## 3. Complete the Setup Wizard
 
-On first access, you will be automatically redirected to the setup wizard. There are 5 steps:
+On first access, you will be automatically redirected to the setup wizard. There are 4 steps:
 
 ### Step 1: Create Account
 
-Set the administrator username and password. This account is used to log into the AnimeSub web interface.
+Set the administrator username and password.
 
 ### Step 2: Configure qBittorrent
 
@@ -58,33 +55,26 @@ Enter your qBittorrent WebUI connection details:
 | Username | WebUI login username | `admin` |
 | Password | WebUI login password | `yourpassword` |
 
-Click "Test Connection" to verify the connection before proceeding.
+Click "Test Connection" to verify before proceeding.
 
 ### Step 3: TMDB Token (Optional)
-
-TMDB (The Movie Database) provides English metadata and landscape backdrop images.
 
 1. Visit [TMDB Developer Settings](https://www.themoviedb.org/settings/api) to register and apply for an API token
 2. Paste the **API Read Access Token** (Bearer Token) here
 
-> If left empty, TMDB features will be disabled. Anime will still display, but without English content or landscape images.
+> If left empty, English metadata and landscape backdrop images will be disabled.
 
-### Step 4: Preferences
+### Step 4: Preferences & Verification
 
-- **Display Language**: Choose Chinese or English
-- **Download Path**: Set the qBittorrent save path (optional)
-
-### Step 5: Verification
-
-The system automatically tests all connections and displays a configuration summary. Click "Finish" to enter the main interface.
+Set display language and download preferences. The system automatically verifies all connections and completes setup.
 
 ## Custom Port
 
-If port 3000 is in use, change the `ports` section in `docker-compose.yml`:
+Edit the `ports` section in `docker-compose.yml`:
 
 ```yaml
 ports:
-  - "8888:80"   # Change 3000 to your desired port
+  - "8080:5072"   # change 8080 to your desired port
 ```
 
 Then restart:
@@ -93,9 +83,16 @@ Then restart:
 docker compose up -d
 ```
 
-## Local Development (without Docker)
+## No Command-Line Deployment
 
-To run in a local development environment:
+If your environment doesn't support a command line (e.g., enterprise NAS, Portainer), download the tar image for your architecture from the [latest release](https://github.com/hhlyyng/AnimeSub/releases/latest) (`animesub-vX.X.X-arm64.tar` or `animesub-vX.X.X-amd64.tar`), import it via your management UI, and start the container with:
+
+| Setting | Value |
+|---------|-------|
+| Port mapping | host port → `5072` |
+| Volume mount | host directory → `/app/data` |
+
+## Local Development
 
 **Backend**
 
