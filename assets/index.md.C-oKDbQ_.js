@@ -1,0 +1,1 @@
+import{v as e,o as t,c as a}from"./chunks/framework.D3n7QxxD.js";const s=JSON.parse('{"title":"","description":"","frontmatter":{},"headers":[],"relativePath":"index.md","filePath":"index.md"}'),n={name:"index.md"},d=Object.assign(n,{setup(o){return e(()=>{window.location.replace("/AnimeSub/zh/")}),(r,c)=>(t(),a("div"))}});export{s as __pageData,d as default};
