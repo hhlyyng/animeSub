@@ -16,15 +16,19 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const token = useAppStore((state) => state.token);
+  const clearToken = useAppStore((state) => state.clearToken);
   const [authChecked, setAuthChecked] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
         const status = await authApi.getAuthStatus(token);
-        if (!status.isSetupCompleted) {
-          setNeedsSetup(true);
+        if (!status.isSetupCompleted) setNeedsSetup(true);
+        setIsAuthenticated(status.isAuthenticated);
+        if (token && !status.isAuthenticated) {
+          clearToken();
         }
       } catch {
         // If auth check fails, continue — routing will handle it
@@ -52,7 +56,9 @@ export default function App() {
       <Routes>
         <Route path="/setup" element={<SetupPage onSetupComplete={onSetupComplete} />} />
         <Route path="/login" element={
-          needsSetup ? <Navigate to="/setup" replace /> : <LoginBlock />
+          needsSetup ? <Navigate to="/setup" replace />
+          : isAuthenticated ? <Navigate to="/home" replace />
+          : <LoginBlock />
         } />
         <Route path="/*" element={
           needsSetup
